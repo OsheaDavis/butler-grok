@@ -1,0 +1,35 @@
+# Dependencies & build
+node_modules/
+dist/
+release/
+.vite/
+*.log
+npm-debug.log*
+
+# Secrets & local env
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# User data (API keys, chats, media cache — never commit)
+Data/
+!Data/.gitkeep
+
+# OS / editor
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+
+# Local / personal
+*.local
+_backup*/
+assets/_backup*/
+
+# Electron builder cache
+.cache/

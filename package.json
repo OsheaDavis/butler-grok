@@ -1,0 +1,92 @@
+{
+  "name": "butler-grok",
+  "version": "0.1.0",
+  "description": "Butler Grok — friendlier Windows desktop GUI for Grok Build / xAI (unofficial, third-party)",
+  "main": "electron/main.cjs",
+  "author": "Butler Grok contributors",
+  "license": "MIT",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YOUR_USER/butler-grok.git"
+  },
+  "bugs": {
+    "url": "https://github.com/YOUR_USER/butler-grok/issues"
+  },
+  "homepage": "https://github.com/YOUR_USER/butler-grok#readme",
+  "keywords": [
+    "grok",
+    "xai",
+    "grok-build",
+    "electron",
+    "desktop",
+    "windows",
+    "unofficial"
+  ],
+  "scripts": {
+    "dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "build": "vite build",
+    "start": "electron .",
+    "start:prod": "npm run build && set BUTLER_PROD=1&& electron .",
+    "pack": "npm run build && set CSC_IDENTITY_AUTO_DISCOVERY=false&& electron-builder --win --config.win.signAndEditExecutable=false",
+    "preview": "vite preview"
+  },
+  "build": {
+    "appId": "com.butlergrok.app",
+    "productName": "Butler Grok",
+    "copyright": "Copyright © Butler Grok contributors (third-party, not official xAI)",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "assets",
+        "to": "assets"
+      }
+    ],
+    "win": {
+      "icon": "assets/butler-front.png",
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "ButlerGrok-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Butler Grok",
+      "license": "LICENSE",
+      "warningsAsErrors": false
+    }
+  },
+  "dependencies": {
+    "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "electron": "^34.2.0",
+    "electron-builder": "^25.1.8",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0",
+    "wait-on": "^8.0.2"
+  }
+}
