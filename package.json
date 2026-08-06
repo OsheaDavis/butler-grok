@@ -1,19 +1,19 @@
-{
+﻿{
   "name": "butler-grok",
   "version": "0.1.0",
-  "description": "Butler Grok — friendlier Windows desktop GUI for Grok Build / xAI (unofficial, third-party)",
+  "description": "Butler Grok â€” friendlier Windows desktop GUI for Grok Build / xAI (unofficial, third-party)",
   "main": "electron/main.cjs",
   "author": "Butler Grok contributors",
   "license": "MIT",
   "private": false,
   "repository": {
     "type": "git",
-    "url": "https://github.com/YOUR_USER/butler-grok.git"
+    "url": "https://github.com/oshea-davis/butler-grok.git"
   },
   "bugs": {
-    "url": "https://github.com/YOUR_USER/butler-grok/issues"
+    "url": "https://github.com/oshea-davis/butler-grok/issues"
   },
-  "homepage": "https://github.com/YOUR_USER/butler-grok#readme",
+  "homepage": "https://github.com/oshea-davis/butler-grok#readme",
   "keywords": [
     "grok",
     "xai",
@@ -34,7 +34,7 @@
   "build": {
     "appId": "com.butlergrok.app",
     "productName": "Butler Grok",
-    "copyright": "Copyright © Butler Grok contributors (third-party, not official xAI)",
+    "copyright": "Copyright Â© Butler Grok contributors (third-party, not official xAI)",
     "directories": {
       "output": "release"
     },
