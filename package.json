@@ -1,7 +1,7 @@
-﻿{
+{
   "name": "butler-grok",
   "version": "0.1.0",
-  "description": "Butler Grok â€” friendlier Windows desktop GUI for Grok Build / xAI (unofficial, third-party)",
+  "description": "Butler Grok - friendlier unofficial Windows desktop GUI for Grok Build / xAI",
   "main": "electron/main.cjs",
   "author": "Butler Grok contributors",
   "license": "MIT",
