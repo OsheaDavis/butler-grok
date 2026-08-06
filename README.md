@@ -41,7 +41,7 @@ X / Grok Build users asked for something approachable — this is that starting 
 ## Quick start (developers)
 
 ```powershell
-git clone https://github.com/oshea-davis/butler-grok.git
+git clone https://github.com/OsheaDavis/butler-grok.git
 cd butler-grok
 npm install
 npm run dev

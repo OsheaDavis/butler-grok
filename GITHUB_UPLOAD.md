@@ -33,7 +33,7 @@ git status
 git commit -m "Initial public release of Butler Grok (unofficial Grok Build desktop GUI)"
 
 git branch -M main
-git remote add origin https://github.com/oshea-davis/butler-grok.git
+git remote add origin https://github.com/OsheaDavis/butler-grok.git
 git push -u origin main
 ```
 

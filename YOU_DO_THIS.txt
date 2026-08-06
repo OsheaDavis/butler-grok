@@ -3,7 +3,7 @@
 ============================================================
 
 I already created your public GitHub repository:
-  https://github.com/oshea-davis/butler-grok
+  https://github.com/OsheaDavis/butler-grok
 
 Your full clean project is ready on this PC:
   C:\Grok Build\butler-grok
@@ -21,7 +21,7 @@ step from here. You only need to sign in once.
 2. Double-click:  PUSH_TO_GITHUB.bat
 
 3. If a browser / GitHub login window opens:
-   - Sign in as:  oshea-davis
+   - Sign in as:  OsheaDavis
    - Allow Git to access GitHub if asked
 
 4. Wait until the black window says SUCCESS
@@ -34,7 +34,7 @@ That uploads ALL code + butler images + videos.
 ------------------------------------------------------------
 
 1. Install:  https://desktop.github.com
-2. Sign in as oshea-davis
+2. Sign in as OsheaDavis
 3. File → Add Local Repository
 4. Choose:  C:\Grok Build\butler-grok
 5. Click Publish / Push
@@ -45,7 +45,7 @@ That uploads ALL code + butler images + videos.
   AFTER IT WORKS
 ------------------------------------------------------------
 
-Open:  https://github.com/oshea-davis/butler-grok
+Open:  https://github.com/OsheaDavis/butler-grok
 
 You should see README, src, electron, assets, etc.
 

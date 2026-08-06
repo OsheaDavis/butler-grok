@@ -8,7 +8,7 @@ echo ============================================================
 echo   Butler Grok - Upload everything to GitHub
 echo ============================================================
 echo.
-echo   Repo:   https://github.com/oshea-davis/butler-grok
+echo   Repo:   https://github.com/OsheaDavis/butler-grok
 echo   Folder: %CD%
 echo.
 echo   A GitHub sign-in window may open in your browser.
@@ -31,7 +31,7 @@ if errorlevel 1 (
 )
 
 git remote remove origin 2>nul
-git remote add origin https://github.com/oshea-davis/butler-grok.git
+git remote add origin https://github.com/OsheaDavis/butler-grok.git
 
 echo Checking files...
 git status -sb
@@ -80,7 +80,7 @@ echo ============================================================
 echo   SUCCESS! Your project is on GitHub.
 echo ============================================================
 echo.
-echo   Open: https://github.com/oshea-davis/butler-grok
+echo   Open: https://github.com/OsheaDavis/butler-grok
 echo.
-start https://github.com/oshea-davis/butler-grok
+start https://github.com/OsheaDavis/butler-grok
 pause
