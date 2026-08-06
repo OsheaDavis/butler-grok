@@ -1,6 +1,6 @@
-# Butler Grok
+﻿# Butler Grok
 
-**A friendlier Windows desktop home for [Grok Build](https://grok.com)** — projects, chat, tasks, Display review, and a butler character that talks back.
+**A friendlier Windows desktop home for [Grok Build](https://grok.com)** â€” projects, chat, tasks, Display review, and a butler character that talks back.
 
 > **Unofficial, third-party open source.**  
 > Not affiliated with, endorsed by, or an official product of **xAI**, **X**, **SpaceX**, or **Grok**.  
@@ -12,6 +12,10 @@
 
 ---
 
+
+## Screenshot
+
+![Butler Grok desk](docs/screenshots/butler-grok-desk.png)
 ## Why this exists
 
 Grok Build is powerful. Butler Grok is the **noob-friendly desk** around it:
@@ -23,7 +27,7 @@ Grok Build is powerful. Butler Grok is the **noob-friendly desk** around it:
 - Modes: local Grok CLI, xAI cloud API, or both  
 - Animated butler (stills + short video loops)
 
-X / Grok Build users asked for something approachable — this is that starting point. **PRs and forks welcome.**
+X / Grok Build users asked for something approachable â€” this is that starting point. **PRs and forks welcome.**
 
 ---
 
@@ -34,7 +38,7 @@ X / Grok Build users asked for something approachable — this is that starting 
 | **Windows 10/11** (64-bit) | Primary target |
 | **Node.js 20+** | For development |
 | **Grok Build CLI** (`grok` on PATH) | Mode A / C, marketplace, project Grok terminal |
-| **xAI API key** (optional) | Mode B / C — cloud chat, Leo voice, Imagine |
+| **xAI API key** (optional) | Mode B / C â€” cloud chat, Leo voice, Imagine |
 
 ---
 
@@ -62,7 +66,7 @@ npm run pack
 ```
 
 Output: `release\ButlerGrok-Setup-0.1.0.exe`  
-Windows builds are **unsigned** by default — SmartScreen may warn on your own builds.
+Windows builds are **unsigned** by default â€” SmartScreen may warn on your own builds.
 
 ---
 
@@ -86,7 +90,7 @@ User chats, settings, and media cache are **local** and **gitignored**:
 2. Else legacy: `C:\Grok Build\Butler Grok\Data\` (if that tree already exists)  
 3. Else: Electron `userData\Data\` (new contributors)
 
-Do not upload `Data/` — it may contain keys and personal chats.
+Do not upload `Data/` â€” it may contain keys and personal chats.
 
 ---
 
@@ -107,8 +111,8 @@ butler-grok/
 ## Features (snapshot)
 
 - Home desk with rearrangeable tiles  
-- Chat: slash commands (`/imagine`, `/project`, `/like`, `/review`, …), Speak (Enter to stop, Enter to send)  
-- Projects: continue/new chat, per-project Display, library folders, “Open Grok Build” for a project terminal  
+- Chat: slash commands (`/imagine`, `/project`, `/like`, `/review`, â€¦), Speak (Enter to stop, Enter to send)  
+- Projects: continue/new chat, per-project Display, library folders, â€œOpen Grok Buildâ€ for a project terminal  
 - Display: general vs project-scoped panels, votes, fullscreen, **Bring to chat** for image edits  
 - Grok CLI helpers (update / marketplace via new-tab paste where needed)
 
@@ -136,7 +140,7 @@ If you use **Grok Build** as your coding agent, point it at this repo and `PROJE
 
 ## License
 
-[MIT](./LICENSE) — © Butler Grok contributors.
+[MIT](./LICENSE) â€” Â© Butler Grok contributors.
 
 Character art and media under `assets/` are project assets for this app; if you replace them, keep licensing clear in your fork.
 
