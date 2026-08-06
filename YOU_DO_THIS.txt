@@ -1,0 +1,57 @@
+============================================================
+  ONE STEP LEFT (you must do this once)
+============================================================
+
+I already created your public GitHub repository:
+  https://github.com/oshea-davis/butler-grok
+
+Your full clean project is ready on this PC:
+  C:\Grok Build\butler-grok
+
+GitHub does not let me finish the final "sign me in as you"
+step from here. You only need to sign in once.
+
+------------------------------------------------------------
+  EASIEST WAY (double-click)
+------------------------------------------------------------
+
+1. Open folder:  C:\Grok Build\butler-grok
+   (File Explorer should already be open on that folder)
+
+2. Double-click:  PUSH_TO_GITHUB.bat
+
+3. If a browser / GitHub login window opens:
+   - Sign in as:  oshea-davis
+   - Allow Git to access GitHub if asked
+
+4. Wait until the black window says SUCCESS
+   It will open the repo page automatically.
+
+That uploads ALL code + butler images + videos.
+
+------------------------------------------------------------
+  IF THE BAT FAILS — use GitHub Desktop (very beginner-friendly)
+------------------------------------------------------------
+
+1. Install:  https://desktop.github.com
+2. Sign in as oshea-davis
+3. File → Add Local Repository
+4. Choose:  C:\Grok Build\butler-grok
+5. Click Publish / Push
+   If it says the remote is different, choose to overwrite
+   the remote with this local folder (this folder is correct).
+
+------------------------------------------------------------
+  AFTER IT WORKS
+------------------------------------------------------------
+
+Open:  https://github.com/oshea-davis/butler-grok
+
+You should see README, src, electron, assets, etc.
+
+Your private app with API keys stays here (NOT uploaded):
+  C:\Grok Build\Butler Grok\Data
+
+Never upload Data or API keys.
+
+============================================================
