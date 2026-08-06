@@ -1,4 +1,4 @@
-﻿# Upload this folder to GitHub
+# Upload this folder to GitHub
 
 This directory is a **clean copy** of Butler Grok for public sharing.
 
@@ -17,7 +17,7 @@ C:\Grok Build\Butler Grok
 ## One-time publish (GitHub)
 
 1. Create a **new empty repository** on GitHub (e.g. `butler-grok`).  
-   - Public or private â€” your choice.  
+   - Public or private — your choice.  
    - Do **not** add a README on GitHub if you will push this folder (avoids merge conflicts).
 
 2. In PowerShell:
@@ -44,7 +44,7 @@ git push -u origin main
 ## Safety checklist before every push
 
 - [ ] `Data/` is not staged (should be gitignored)  
-- [ ] No real `xai-â€¦` keys in any file  
+- [ ] No real `xai-…` keys in any file  
 - [ ] `git status` looks like source + assets + docs only  
 
 ## Keeping your private app and the GitHub copy in sync
@@ -55,5 +55,5 @@ git push -u origin main
 
 ## What others should run
 
-See **README.md** â€” `npm install` â†’ `npm run dev`.
+See **README.md** — `npm install` → `npm run dev`.
 
