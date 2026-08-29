@@ -28,6 +28,12 @@ import {
 } from '../lib/xaiChat';
 import { speakText } from '../lib/speech';
 import { speakWithLeo, stopLeoAudio } from '../lib/leoTts';
+import { createLeoSpeakQueue } from '../lib/leoSpeakQueue';
+import {
+  consumeSpeechPieces,
+  flushSpeechRemainder,
+  prepareStreamingSpeech,
+} from '../lib/speechSentences';
 import { ensureSampleData } from '../lib/sampleData';
 import {
   extractMediaFromText,
@@ -77,6 +83,31 @@ export function useAppStore() {
   const [retainedThinking, setRetainedThinking] = useState('');
   const streamAbortRef = useRef<AbortController | null>(null);
   const voiceCancelledRef = useRef(false);
+  const speechTakenRef = useRef(0);
+  const speechSpokenCharsRef = useRef(0);
+  const speechActiveRef = useRef(false);
+  const leoQueueHooksRef = useRef<{
+    getApiKey: () => string;
+    isCancelled: () => boolean;
+    onFirstAudioStart: () => void;
+    onQueueIdle: () => void;
+    onError: (msg: string) => void;
+  }>({
+    getApiKey: () => '',
+    isCancelled: () => false,
+    onFirstAudioStart: () => {},
+    onQueueIdle: () => {},
+    onError: (_msg: string) => {},
+  });
+  const leoQueueRef = useRef(
+    createLeoSpeakQueue({
+      getApiKey: () => leoQueueHooksRef.current.getApiKey(),
+      isCancelled: () => leoQueueHooksRef.current.isCancelled(),
+      onFirstAudioStart: () => leoQueueHooksRef.current.onFirstAudioStart(),
+      onQueueIdle: () => leoQueueHooksRef.current.onQueueIdle(),
+      onError: (msg) => leoQueueHooksRef.current.onError(msg),
+    })
+  );
   /** True while this window owns the active cloud stream (for multi-window sync) */
   const streamOwnerRef = useRef(false);
   /** Skip one persist after load/remote apply so panel windows don't wipe new display items */
@@ -106,6 +137,24 @@ export function useAppStore() {
     setToast(msg);
     setTimeout(() => setToast(null), 4000);
   }, []);
+
+  leoQueueHooksRef.current = {
+    getApiKey: () => settingsRef.current.apiKey,
+    isCancelled: () => voiceCancelledRef.current,
+    onFirstAudioStart: () => {
+      if (voiceCancelledRef.current) return;
+      setSpeaking(true);
+      setLeoReady(true);
+    },
+    onQueueIdle: () => setSpeaking(false),
+    onError: (msg) => {
+      setLeoReady(false);
+      if (leoQueueRef.current.heardAudio() && msg) {
+        showToast(`Leo failed — (${msg.slice(0, 90)})`);
+      }
+      speechActiveRef.current = false;
+    },
+  };
 
   /** Call on typing / send — may fire welcome after 15 min quiet */
   const noteUserActivity = useCallback(() => {
@@ -519,8 +568,66 @@ export function useAppStore() {
     []
   );
 
+  const resetStreamingSpeech = useCallback(() => {
+    speechTakenRef.current = 0;
+    speechSpokenCharsRef.current = 0;
+    speechActiveRef.current = false;
+    leoQueueRef.current.reset();
+  }, []);
+
+  const beginStreamingSpeech = useCallback(() => {
+    const s = settingsRef.current;
+    const canLeo =
+      Boolean(s.apiKey.trim()) &&
+      (s.connectionMode === 'B' || s.connectionMode === 'C') &&
+      s.butlerVoiceOn &&
+      !s.muteSounds;
+    resetStreamingSpeech();
+    voiceCancelledRef.current = false;
+    if (!canLeo) return false;
+    stopLeoAudio();
+    speechActiveRef.current = true;
+    return true;
+  }, [resetStreamingSpeech]);
+
+  const pushStreamingSpeech = useCallback((full: string) => {
+    if (!speechActiveRef.current || voiceCancelledRef.current) return;
+    const prepared = prepareStreamingSpeech(full);
+    const next = consumeSpeechPieces(
+      prepared,
+      speechTakenRef.current,
+      speechSpokenCharsRef.current
+    );
+    speechTakenRef.current = next.nextTaken;
+    speechSpokenCharsRef.current = next.nextSpokenChars;
+    for (const piece of next.pieces) {
+      leoQueueRef.current.enqueue(piece);
+    }
+  }, []);
+
+  const finishStreamingSpeech = useCallback((full: string) => {
+    if (!speechActiveRef.current) return false;
+    if (voiceCancelledRef.current) {
+      resetStreamingSpeech();
+      return true;
+    }
+    const prepared = prepareStreamingSpeech(full);
+    const tail = flushSpeechRemainder(
+      prepared,
+      speechTakenRef.current,
+      speechSpokenCharsRef.current
+    );
+    if (tail) leoQueueRef.current.enqueue(tail);
+    const used = leoQueueRef.current.wasUsed() || Boolean(tail);
+    leoQueueRef.current.finish();
+    speechActiveRef.current = false;
+    return used;
+  }, [resetStreamingSpeech]);
+
   const stopVoice = useCallback(() => {
     voiceCancelledRef.current = true;
+    speechActiveRef.current = false;
+    leoQueueRef.current.reset();
     stopLeoAudio();
     if ('speechSynthesis' in window) {
       try {
@@ -1099,6 +1206,7 @@ export function useAppStore() {
 
       let reply: string;
       let thinking = '';
+      let cloudStreamOk = false;
 
       if (canCloud) {
         const folderPaths = dataRef.current.folders
@@ -1192,6 +1300,7 @@ export function useAppStore() {
           return { ...prev, conversations: convs, activeConversationId: activeId, draft: '' };
         });
 
+        const streamingSpeech = beginStreamingSpeech();
         const result = await xaiChatCompletionStream({
           apiKey: s.apiKey,
           messages: [
@@ -1207,12 +1316,14 @@ export function useAppStore() {
           onContent: (full) => {
             setLiveReply(full);
             publishLive({ busy: true, reply: full });
+            if (streamingSpeech) pushStreamingSpeech(full);
           },
         });
 
         if (result.ok) {
           reply = result.content;
           thinking = result.thinking;
+          cloudStreamOk = true;
           setApiOk(true);
           setLeoReady(true);
         } else {
@@ -1251,8 +1362,13 @@ export function useAppStore() {
         ingestMediaFromReply(reply);
       }
 
-      // Speak first (TTS download starts immediately), then finish UI bookkeeping
-      speakReply(reply);
+      // Leo sentences start from onContent; only speak the full reply when we did not stream.
+      if (cloudStreamOk && speechActiveRef.current) {
+        finishStreamingSpeech(reply);
+      } else if (!leoQueueRef.current.heardAudio() && !voiceCancelledRef.current) {
+        resetStreamingSpeech();
+        speakReply(reply);
+      }
       // Clear Display→chat attachment after a normal reply (image-edit path clears itself)
       setData((d) => (d.chatAttachment ? { ...d, chatAttachment: null } : d));
 
@@ -1271,14 +1387,18 @@ export function useAppStore() {
     },
     [
       appendMessages,
+      beginStreamingSpeech,
       chatBusy,
       ensureActiveConversation,
+      finishStreamingSpeech,
       ingestMediaFromReply,
       localButlerReply,
       noteUserActivity,
       openGrokTerminal,
       openPanel,
       publishLive,
+      pushStreamingSpeech,
+      resetStreamingSpeech,
       speakReply,
       startNewConversation,
     ]
@@ -1289,10 +1409,12 @@ export function useAppStore() {
       showToast('No Butler reply to play yet.');
       return;
     }
+    voiceCancelledRef.current = false;
+    resetStreamingSpeech();
     stopLeoAudio();
     speakReply(lastAssistantText);
     showToast('Replaying last Butler reply…');
-  }, [lastAssistantText, speakReply, showToast]);
+  }, [lastAssistantText, resetStreamingSpeech, speakReply, showToast]);
 
   const addDisplayFromUrl = useCallback(
     (url: string) => {
