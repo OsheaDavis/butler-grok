@@ -18,7 +18,7 @@ Windows **Electron + React + Vite** app: a butler-themed desk for Grok Build and
 - Tasks tile count and Tasks panel list share the same persisted task array  
 - Modes A / B / C, Settings, first-run wizard  
 - Slash commands (`/imagine`, `/project`, `/like`, `/review`, `/save`, …)  
-- Speak: Enter stops recording, Enter again sends  
+- Speak: Enter stops recording, Enter again sends; Leo TTS streams into Windows MediaPlayer so voice can start as audio arrives (mouth/VU still wait for real playback start)  
 - Projects: continue/new chat, chat list, Save as project from general chat  
 - Per-project Display (`projdisp:<id>`) + General Display  
 - Library folders, votes, Bring to chat / drag-to-chat for image recreate  

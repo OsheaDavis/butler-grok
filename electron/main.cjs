@@ -18,6 +18,15 @@ const os = require('os');
 const { spawn } = require('child_process');
 const { atomicWriteJson, readJsonWithBackup } = require('./storage.cjs');
 const { seedAppDataIfNeeded } = require('./sampleSeed.cjs');
+const {
+  MIN_PLAY_BYTES,
+  MIN_AUDIO_BYTES,
+  createLeoDownloadState,
+  writeStreamToGrowingFile,
+  startLeoStreamServer,
+  closeLeoStreamServer,
+  buildLeoMediaPlayerScript,
+} = require('./leoStream.cjs');
 
 const isDev = !app.isPackaged;
 const APP_ROOT = isDev ? path.join(__dirname, '..') : path.dirname(app.getPath('exe'));
@@ -1275,11 +1284,30 @@ let leoPlayerProc = null;
 let leoTempFile = null;
 /** When true, killing the player is intentional (Stop voice) — not a failure. */
 let leoStopRequested = false;
+/** Bumped on each leo:speak so a replaced clip does not fall through to Windows TTS. */
+let leoSpeakEpoch = 0;
+/** @type {AbortController | null} */
+let leoAbortController = null;
+/** @type {import('http').Server | null} */
+let leoStreamServer = null;
+/** @type {{ aborted?: boolean } | null} */
+let leoStreamState = null;
 
 function stopLeoPlaybackMain(opts = {}) {
   const userStop = Boolean(opts.userStop);
   const hadPlayer = Boolean(leoPlayerProc && !leoPlayerProc.killed);
   if (userStop) leoStopRequested = true;
+  if (leoStreamState) leoStreamState.aborted = true;
+  if (leoAbortController) {
+    try {
+      leoAbortController.abort();
+    } catch {
+      /* ignore */
+    }
+    leoAbortController = null;
+  }
+  closeLeoStreamServer(leoStreamServer);
+  leoStreamServer = null;
   if (leoPlayerProc && !leoPlayerProc.killed) {
     try {
       leoPlayerProc.kill();
@@ -1306,9 +1334,67 @@ function stopLeoPlaybackMain(opts = {}) {
   }
 }
 
+function spawnLeoMediaPlayer(audioUrl, file, epoch) {
+  const ps = buildLeoMediaPlayerScript(audioUrl);
+  return new Promise((resolve) => {
+    const child = spawn(
+      'powershell.exe',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps],
+      { windowsHide: true }
+    );
+    leoPlayerProc = child;
+    let err = '';
+    let started = false;
+    child.stdout.on('data', (d) => {
+      const s = d.toString();
+      if (!started && s.includes('LEO_PLAY_START')) {
+        started = true;
+        broadcastAll('leo:audio', { phase: 'start' });
+      }
+    });
+    child.stderr.on('data', (d) => {
+      err += d.toString();
+    });
+    child.on('error', (e) => {
+      if (epoch !== leoSpeakEpoch) {
+        resolve({ ok: true, cancelled: true });
+        return;
+      }
+      broadcastAll('leo:audio', { phase: 'end', error: String(e.message || e) });
+      resolve({ ok: false, error: String(e.message || e) });
+    });
+    child.on('close', (code) => {
+      if (leoPlayerProc === child) leoPlayerProc = null;
+      closeLeoStreamServer(leoStreamServer);
+      if (leoStreamServer) leoStreamServer = null;
+      try {
+        if (file && fs.existsSync(file)) fs.unlinkSync(file);
+      } catch {
+        /* ignore */
+      }
+      if (leoTempFile === file) leoTempFile = null;
+      if (epoch !== leoSpeakEpoch) {
+        resolve({ ok: true, cancelled: true });
+        return;
+      }
+      // User hit Stop voice — success path, do NOT fall back to Windows TTS
+      if (leoStopRequested) {
+        leoStopRequested = false;
+        broadcastAll('leo:audio', { phase: 'end', cancelled: true });
+        resolve({ ok: true, cancelled: true });
+        return;
+      }
+      broadcastAll('leo:audio', { phase: 'end', cancelled: false });
+      if (code === 0) resolve({ ok: true });
+      else resolve({ ok: false, error: err.trim() || `Player exited ${code}` });
+    });
+  });
+}
+
 /**
  * Fetch Leo TTS in the main process and play with Windows MediaPlayer.
- * Avoids Chromium autoplay / silent HTMLAudioElement failures in the renderer.
+ * Streams bytes to a localhost progressive URL so playback can start before
+ * the full MP3 is on disk. Avoids Chromium HTMLAudioElement (autoplay / silence).
  */
 ipcMain.handle('leo:speak', async (_e, payload) => {
   const apiKey = String(payload?.apiKey || '').trim();
@@ -1322,9 +1408,13 @@ ipcMain.handle('leo:speak', async (_e, payload) => {
   if (!apiKey) return { ok: false, error: 'No API key' };
   if (!text) return { ok: false, error: 'Nothing to speak' };
 
+  const epoch = ++leoSpeakEpoch;
   // Stop any previous clip without treating it as a user "Stop voice"
   leoStopRequested = false;
   stopLeoPlaybackMain({ userStop: false });
+
+  const ac = new AbortController();
+  leoAbortController = ac;
 
   try {
     const res = await fetch('https://api.x.ai/v1/tts', {
@@ -1333,6 +1423,7 @@ ipcMain.handle('leo:speak', async (_e, payload) => {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
+      signal: ac.signal,
       body: JSON.stringify({
         text,
         voice_id: 'leo',
@@ -1345,85 +1436,60 @@ ipcMain.handle('leo:speak', async (_e, payload) => {
       return { ok: false, error: `TTS ${res.status}: ${body.slice(0, 160)}` };
     }
 
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length < 100) return { ok: false, error: 'Leo TTS returned empty audio' };
+    if (leoStopRequested || epoch !== leoSpeakEpoch) {
+      return { ok: true, cancelled: true };
+    }
+
+    const clHeader = res.headers.get('content-length');
+    const contentLength = clHeader ? Number(clHeader) : null;
+    const state = createLeoDownloadState(contentLength);
+    leoStreamState = state;
 
     const tmpDir = path.join(DATA_DIR, 'tmp');
     if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
     const file = path.join(tmpDir, `leo-${Date.now()}.mp3`);
-    fs.writeFileSync(file, buf);
+    fs.writeFileSync(file, Buffer.alloc(0));
     leoTempFile = file;
 
-    // Play MP3 via WPF MediaPlayer (default Windows playback device).
-    // Prints LEO_PLAY_START on stdout the moment audio actually begins so the UI
-    // can sync speak animation + VU meter (not during TTS download).
-    const fileUri = 'file:///' + file.replace(/\\/g, '/');
-    const ps = `
-Add-Type -AssemblyName PresentationCore
-$mp = New-Object System.Windows.Media.MediaPlayer
-$mp.Open([Uri]'${fileUri.replace(/'/g, "''")}')
-$sw = [Diagnostics.Stopwatch]::StartNew()
-while (-not $mp.NaturalDuration.HasTimeSpan) {
-  Start-Sleep -Milliseconds 50
-  if ($sw.ElapsedMilliseconds -gt 8000) { throw 'Leo audio failed to load' }
-}
-$mp.Volume = 1.0
-$mp.Play()
-[Console]::Out.WriteLine('LEO_PLAY_START')
-[Console]::Out.Flush()
-# Slightly shorter pad than before to reduce tail lag after speech ends
-$durMs = [Math]::Ceiling($mp.NaturalDuration.TimeSpan.TotalMilliseconds) + 120
-Start-Sleep -Milliseconds $durMs
-$mp.Close()
-`.trim();
+    let streamUrl = null;
+    try {
+      const started = await startLeoStreamServer(file, state);
+      leoStreamServer = started.server;
+      streamUrl = started.url;
+    } catch {
+      streamUrl = null;
+    }
 
-    const playResult = await new Promise((resolve) => {
-      const child = spawn(
-        'powershell.exe',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps],
-        { windowsHide: true }
-      );
-      leoPlayerProc = child;
-      let err = '';
-      let started = false;
-      child.stdout.on('data', (d) => {
-        const s = d.toString();
-        if (!started && s.includes('LEO_PLAY_START')) {
-          started = true;
-          broadcastAll('leo:audio', { phase: 'start' });
-        }
-      });
-      child.stderr.on('data', (d) => {
-        err += d.toString();
-      });
-      child.on('error', (e) => {
-        broadcastAll('leo:audio', { phase: 'end', error: String(e.message || e) });
-        resolve({ ok: false, error: String(e.message || e) });
-      });
-      child.on('close', (code) => {
-        if (leoPlayerProc === child) leoPlayerProc = null;
-        try {
-          if (fs.existsSync(file)) fs.unlinkSync(file);
-        } catch {
-          /* ignore */
-        }
-        if (leoTempFile === file) leoTempFile = null;
-        // User hit Stop voice — success path, do NOT fall back to Windows TTS
-        if (leoStopRequested) {
-          leoStopRequested = false;
-          broadcastAll('leo:audio', { phase: 'end', cancelled: true });
-          resolve({ ok: true, cancelled: true });
-          return;
-        }
-        broadcastAll('leo:audio', { phase: 'end', cancelled: false });
-        if (code === 0) resolve({ ok: true });
-        else resolve({ ok: false, error: err.trim() || `Player exited ${code}` });
-      });
+    const playUrl = streamUrl || `file:///${file.replace(/\\/g, '/')}`;
+    /** @type {Promise<{ ok: boolean, cancelled?: boolean, error?: string }> | null} */
+    let playerPromise = null;
+    const startPlayer = () => {
+      if (playerPromise || state.aborted || leoStopRequested || epoch !== leoSpeakEpoch) {
+        return;
+      }
+      playerPromise = spawnLeoMediaPlayer(playUrl, file, epoch);
+    };
+
+    await writeStreamToGrowingFile(res.body, file, state, (bytes) => {
+      if (streamUrl && bytes >= MIN_PLAY_BYTES) startPlayer();
     });
 
-    return playResult;
+    if (leoStopRequested || state.aborted || epoch !== leoSpeakEpoch) {
+      return { ok: true, cancelled: true };
+    }
+    if (state.bytesWritten < MIN_AUDIO_BYTES) {
+      stopLeoPlaybackMain();
+      return { ok: false, error: 'Leo TTS returned empty audio' };
+    }
+
+    startPlayer();
+    if (!playerPromise) {
+      stopLeoPlaybackMain();
+      return { ok: false, error: 'Leo audio player did not start' };
+    }
+    return await playerPromise;
   } catch (e) {
-    if (leoStopRequested) {
+    if (leoStopRequested || epoch !== leoSpeakEpoch || e?.name === 'AbortError') {
       leoStopRequested = false;
       return { ok: true, cancelled: true };
     }

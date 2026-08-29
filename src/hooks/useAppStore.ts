@@ -569,8 +569,7 @@ export function useAppStore() {
     const canLeo =
       Boolean(s.apiKey.trim()) && (s.connectionMode === 'B' || s.connectionMode === 'C');
 
-    // Start network TTS ASAP — most of the “delay” is API download, not the player
-    // (mouth/VU still wait for real LEO_PLAY_START)
+    // Stream TTS in main as bytes arrive; mouth/VU still wait for real LEO_PLAY_START
 
     const markStart = () => {
       if (voiceCancelledRef.current) return;
