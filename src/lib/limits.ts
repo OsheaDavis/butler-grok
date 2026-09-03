@@ -7,7 +7,7 @@ export const LIMITS = {
   /** Max chat threads kept per project (saved + recent) */
   projectConversations: 40,
   recentConversations: 10,
-  projects: 10,
+  projects: 25,
   tasks: 10,
-  displayItems: 80,
+  displayItems: 200,
 } as const;
