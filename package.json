@@ -34,7 +34,7 @@
   "build": {
     "appId": "com.butlergrok.app",
     "productName": "Butler Grok",
-    "copyright": "Copyright Â© Butler Grok contributors (third-party, not official xAI)",
+    "copyright": "Copyright © Butler Grok contributors (third-party, not official xAI)",
     "directories": {
       "output": "release"
     },

@@ -598,6 +598,8 @@ export function ChatDock({
               onDraft(v);
             }}
             onKeyDown={(e) => {
+              const composing =
+                e.nativeEvent.isComposing || e.keyCode === 229;
               if (e.key === 'Escape' && showSlashMenu) {
                 e.preventDefault();
                 onDraft('');
@@ -616,6 +618,7 @@ export function ChatDock({
               }
               // Enter again → send transcript / typed message
               if (e.key === 'Enter' && !e.shiftKey) {
+                if (composing) return;
                 e.preventDefault();
                 if (!chatBusy && !transcribing && !listening && draft.trim()) {
                   onSend(draft);
@@ -627,7 +630,10 @@ export function ChatDock({
             type="button"
             className="send"
             disabled={!draft.trim() || chatBusy || transcribing || listening}
-            onClick={() => onSend(draft)}
+            onClick={() => {
+              if (!draft.trim() || chatBusy || transcribing || listening) return;
+              onSend(draft);
+            }}
             title={listening ? 'Stop speaking first (Enter)' : 'Send (Enter)'}
           >
             {chatBusy ? '…' : listening ? '…' : 'Send'}

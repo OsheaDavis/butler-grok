@@ -12,7 +12,9 @@ Windows **Electron + React + Vite** app: a butler-themed desk for Grok Build and
 
 ## What’s working (high level)
 
-- Home desk, floating/OS panels, docked chat  
+- Home desk, floating/OS panels, docked chat (Market / New project chat / compose send wired; header stays usable when maximized)
+- Recent/search strings use UTF-8 (no “Searchâ€¦” junk)
+- Tasks list is visible when the tile shows a count (e.g. 2/10)  
 - Modes A / B / C, Settings, first-run wizard  
 - Slash commands (`/imagine`, `/project`, `/like`, `/review`, `/save`, …)  
 - Speak: Enter stops recording, Enter again sends  

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   DEFAULT_APP_DATA,
   DEFAULT_SETTINGS,
+  mergeHomeTiles,
   type AppData,
   type ChatAttachment,
   type ChatMessage,
@@ -170,18 +171,22 @@ export function useAppStore() {
           settingsRes.data.chatHeight ||
           DEFAULT_SETTINGS.chatHeight ||
           220,
-        homeTiles: needsLayoutReset
-          ? DEFAULT_SETTINGS.homeTiles
-          : settingsRes.data.homeTiles,
+        homeTiles: mergeHomeTiles(
+          needsLayoutReset ? DEFAULT_SETTINGS.homeTiles : settingsRes.data.homeTiles
+        ),
       };
       let mergedData: AppData = normalizeAppDataDisplayAndProjects({
         ...DEFAULT_APP_DATA,
         ...dataRes.data,
       }) as AppData;
       // Testing phase: fill empty sections with sample folders/project/tasks
+      const beforeSample = mergedData;
       mergedData = ensureSampleData(mergedData, homeDir);
       mergedData = normalizeAppDataDisplayAndProjects(mergedData) as AppData;
+      const addedSample = beforeSample !== mergedData;
 
+      settingsRef.current = mergedSettings;
+      dataRef.current = mergedData;
       setSettings(mergedSettings);
       setData(mergedData);
       setFirstRunOpen(!mergedSettings.firstRunDone);
@@ -196,6 +201,7 @@ export function useAppStore() {
       }
       skipNextPersistRef.current = true;
       setReady(true);
+      if (addedSample) void persist();
     })();
     return () => {
       cancelled = true;
@@ -229,7 +235,13 @@ export function useAppStore() {
           const res = await window.butler.load(DATA_FILE, DEFAULT_APP_DATA);
           // Don't let this reload immediately re-save and wipe newer local edits
           skipNextPersistRef.current = true;
-          setData({ ...DEFAULT_APP_DATA, ...res.data });
+          setData(
+            normalizeAppDataDisplayAndProjects({
+              ...DEFAULT_APP_DATA,
+              ...res.data,
+              tasks: Array.isArray(res.data?.tasks) ? res.data.tasks : [],
+            }) as AppData
+          );
         } catch {
           /* ignore */
         }
@@ -318,39 +330,41 @@ export function useAppStore() {
     setPointingPanel(id);
     window.setTimeout(() => setPointingPanel(null), 1700);
 
-    // Prefer real OS windows so panels can move outside the main app frame
-    if (window.butler?.openPanelWindow) {
-      void window.butler.openPanelWindow(id);
-      setOpenFloats((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    const openInApp = () => {
+      setOpenFloats((prev) => {
+        const already = prev.includes(id);
+        setSettings((s) => {
+          if (s.floatLayouts[id]) return s;
+          const offset = (already ? prev.indexOf(id) : prev.length) * 28;
+          return {
+            ...s,
+            floatLayouts: {
+              ...s.floatLayouts,
+              [id]: { x: 36 + offset, y: 36 + offset, w: 460, h: 380 },
+            },
+          };
+        });
+        return already ? prev : [...prev, id];
+      });
       setZCounter((z) => {
         const next = z + 1;
         setFloatZ((fz) => ({ ...fz, [id]: next }));
         return next;
       });
+    };
+
+    // Prefer real OS windows so panels can move outside the main app frame
+    if (window.butler?.openPanelWindow) {
+      void window.butler
+        .openPanelWindow(id)
+        .then((r) => {
+          if (!r || r.ok === false) openInApp();
+        })
+        .catch(() => openInApp());
       return;
     }
 
-    // Browser / fallback: in-app floating panel
-    setOpenFloats((prev) => {
-      const already = prev.includes(id);
-      setSettings((s) => {
-        if (s.floatLayouts[id]) return s;
-        const offset = (already ? prev.indexOf(id) : prev.length) * 28;
-        return {
-          ...s,
-          floatLayouts: {
-            ...s.floatLayouts,
-            [id]: { x: 36 + offset, y: 36 + offset, w: 460, h: 380 },
-          },
-        };
-      });
-      return already ? prev : [...prev, id];
-    });
-    setZCounter((z) => {
-      const next = z + 1;
-      setFloatZ((fz) => ({ ...fz, [id]: next }));
-      return next;
-    });
+    openInApp();
   }, []);
 
   const closePanel = useCallback((id: PanelId) => {
@@ -717,13 +731,13 @@ export function useAppStore() {
       updatedAt: now,
       saved: false,
     };
-    setData((d) => ({
-      ...d,
-      conversations: [conv, ...d.conversations].slice(0, 40),
+    const next: AppData = {
+      ...dataRef.current,
+      conversations: [conv, ...dataRef.current.conversations].slice(0, 40),
       activeConversationId: conv.id,
       draft: '',
       projects: projectId
-        ? d.projects.map((p) =>
+        ? dataRef.current.projects.map((p) =>
             p.id === projectId && !p.conversationIds.includes(conv.id)
               ? {
                   ...p,
@@ -732,14 +746,17 @@ export function useAppStore() {
                 }
               : p
           )
-        : d.projects,
-    }));
+        : dataRef.current.projects,
+    };
+    dataRef.current = next;
+    setData(next);
     showToast(
       projectId
         ? 'New chat in this project — you’re talking inside the project.'
         : 'Started a new conversation.'
     );
-  }, [showToast]);
+    void persist();
+  }, [persist, showToast]);
 
   /**
    * Enter a project workspace: set active project, resume or start its chat,
@@ -776,14 +793,14 @@ export function useAppStore() {
           saved: false,
         };
         convId = conv.id;
-        setData((d) => ({
-          ...d,
+        const next: AppData = {
+          ...dataRef.current,
           activeProjectId: projectId,
-          activeConversationId: convId!,
+          activeConversationId: convId,
           draft: '',
           selectedFolderIdsForNewChat: [...(project.folderIds || [])],
-          conversations: [conv, ...d.conversations].slice(0, 40),
-          projects: d.projects.map((p) =>
+          conversations: [conv, ...dataRef.current.conversations].slice(0, 40),
+          projects: dataRef.current.projects.map((p) =>
             p.id === projectId
               ? {
                   ...p,
@@ -795,20 +812,22 @@ export function useAppStore() {
                 }
               : p
           ),
-        }));
+        };
+        dataRef.current = next;
+        setData(next);
         showToast(`Chat open for “${project.name}” — pick up where you left off.`);
       } else {
-        setData((d) => ({
-          ...d,
+        const next: AppData = {
+          ...dataRef.current,
           activeProjectId: projectId,
-          activeConversationId: convId!,
+          activeConversationId: convId,
           selectedFolderIdsForNewChat: [
             ...new Set([
               ...(project.folderIds || []),
-              ...(d.conversations.find((c) => c.id === convId)?.folderIds || []),
+              ...(dataRef.current.conversations.find((c) => c.id === convId)?.folderIds || []),
             ]),
           ],
-          projects: d.projects.map((p) =>
+          projects: dataRef.current.projects.map((p) =>
             p.id === projectId && !p.conversationIds.includes(convId!)
               ? {
                   ...p,
@@ -817,14 +836,16 @@ export function useAppStore() {
                 }
               : p
           ),
-        }));
+        };
+        dataRef.current = next;
+        setData(next);
         showToast(`Continuing chat in “${project.name}”.`);
       }
 
-      // Float chat beside project work (and keep Projects open if already open)
-      openPanel('chat');
+      // Persist first so a newly opened chat window loads this conversation.
+      void persist().then(() => openPanel('chat'));
     },
-    [openPanel, showToast]
+    [openPanel, persist, showToast]
   );
 
   const sendChat = useCallback(

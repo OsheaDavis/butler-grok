@@ -270,6 +270,14 @@ export const DEFAULT_HOME_TILES: HomeTileLayout[] = [
   { id: 'display', x: 284, y: 488 },
 ];
 
+/** Keep saved desk layouts, but restore any home tiles that were dropped. */
+export function mergeHomeTiles(saved?: HomeTileLayout[] | null): HomeTileLayout[] {
+  const base = saved && saved.length ? [...saved] : [...DEFAULT_HOME_TILES];
+  const have = new Set(base.map((t) => t.id));
+  const missing = DEFAULT_HOME_TILES.filter((t) => !have.has(t.id));
+  return missing.length ? [...base, ...missing] : base;
+}
+
 export type FloatLayout = { x: number; y: number; w: number; h: number };
 
 export const DEFAULT_CHAT_HEIGHT = 220;

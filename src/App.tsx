@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 // useMemo used for panel titles
 import { useAppStore, type AppStore } from './hooks/useAppStore';
 import { HomeTile, type TileLine } from './components/HomeTile';
@@ -192,8 +192,18 @@ function PanelWindowApp({ panelId, store }: { panelId: PanelId; store: AppStore 
 export default function App() {
   const store = useAppStore();
   const panelMode = getPanelIdFromUrl();
-  const useOsWindows = Boolean(window.butler?.openPanelWindow);
   const chatH = store.settings.chatHeight || DEFAULT_CHAT_HEIGHT;
+  const [windowMaximized, setWindowMaximized] = useState(false);
+
+  useEffect(() => {
+    if (!window.butler?.getWindowState && !window.butler?.onWindowState) return;
+    void window.butler.getWindowState?.().then((s) => {
+      if (s && typeof s.maximized === 'boolean') setWindowMaximized(s.maximized);
+    });
+    return window.butler.onWindowState?.((s) => {
+      if (s && typeof s.maximized === 'boolean') setWindowMaximized(s.maximized);
+    });
+  }, []);
 
   useEffect(() => {
     document.documentElement.dataset.theme = store.settings.theme;
@@ -212,7 +222,7 @@ export default function App() {
           window.close();
           return;
         }
-        if (!useOsWindows && store.openFloats.length) {
+        if (store.openFloats.length) {
           const top = [...store.openFloats].sort(
             (a, b) => (store.floatZ[b] || 0) - (store.floatZ[a] || 0)
           )[0];
@@ -222,7 +232,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [store, panelMode, useOsWindows]);
+  }, [store, panelMode]);
 
   const tiles = (store.settings.homeTiles?.length
     ? store.settings.homeTiles
@@ -333,11 +343,11 @@ export default function App() {
 
   return (
     <div
-      className="app"
+      className={`app${windowMaximized ? ' is-maximized' : ''}`}
       style={{
         gridTemplateRows: store.banner
-          ? '48px auto 1fr var(--chat-h)'
-          : '48px 1fr var(--chat-h)',
+          ? 'minmax(48px, auto) auto 1fr var(--chat-h)'
+          : 'minmax(48px, auto) 1fr var(--chat-h)',
       }}
     >
       <header className="titlebar">
@@ -462,7 +472,7 @@ export default function App() {
             }}
           />
 
-          {!useOsWindows ? (
+          {store.openFloats.length ? (
             <div className="float-layer">
               {store.openFloats.map((id) => {
                 const layout = store.settings.floatLayouts[id] || DEFAULT_FLOAT;

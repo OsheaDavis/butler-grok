@@ -4,6 +4,12 @@ contextBridge.exposeInMainWorld('butler', {
   getInfo: () => ipcRenderer.invoke('app:get-info'),
   quit: () => ipcRenderer.invoke('app:quit'),
   minimize: () => ipcRenderer.invoke('app:minimize'),
+  getWindowState: () => ipcRenderer.invoke('app:window-state'),
+  onWindowState: (cb) => {
+    const handler = (_e, state) => cb(state);
+    ipcRenderer.on('window:state', handler);
+    return () => ipcRenderer.removeListener('window:state', handler);
+  },
   setTrayMinimize: (enabled) => ipcRenderer.invoke('app:set-tray-minimize', enabled),
   setLoginItem: (enabled) => ipcRenderer.invoke('app:set-login-item', enabled),
   getLoginItem: () => ipcRenderer.invoke('app:get-login-item'),

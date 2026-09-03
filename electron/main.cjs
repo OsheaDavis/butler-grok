@@ -65,6 +65,18 @@ function panelWindowTitle(panelId) {
   return PANEL_TITLES[panelId] || panelId;
 }
 
+/** Bring a panel in front of a maximized main window (Windows often hides new BrowserWindows). */
+function raiseWindow(win) {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  if (process.platform === 'win32') {
+    win.setAlwaysOnTop(true);
+    win.setAlwaysOnTop(false);
+  }
+}
+
 function loadAppUrl(win, query = {}) {
   const useDevServer = isDev && process.env.BUTLER_PROD !== '1';
   if (useDevServer) {
@@ -81,8 +93,7 @@ function openPanelWindow(panelId) {
   if (panelWindows.has(panelId)) {
     const existing = panelWindows.get(panelId);
     if (existing && !existing.isDestroyed()) {
-      existing.show();
-      existing.focus();
+      raiseWindow(existing);
       return { ok: true, focused: true };
     }
     panelWindows.delete(panelId);
@@ -96,6 +107,7 @@ function openPanelWindow(panelId) {
     minWidth: isChat ? 420 : 320,
     minHeight: isChat ? 400 : 280,
     backgroundColor: '#0b0f14',
+    show: false,
     autoHideMenuBar: true,
     title: `Butler Grok — ${panelWindowTitle(panelId)}`,
     // No parent → can move freely on any monitor, outside main window
@@ -120,7 +132,27 @@ function openPanelWindow(panelId) {
     }
   });
 
-  return { ok: true, focused: false };
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    win.once('ready-to-show', () => {
+      raiseWindow(win);
+      finish({ ok: true, focused: false });
+    });
+    win.webContents.once('did-fail-load', (_e, code, desc) => {
+      console.error('panel load failed', panelId, code, desc);
+      if (!win.isDestroyed()) raiseWindow(win);
+      finish({ ok: false });
+    });
+    setTimeout(() => {
+      if (!win.isDestroyed()) raiseWindow(win);
+      finish({ ok: true, focused: false });
+    }, 4000);
+  });
 }
 
 function closePanelWindow(panelId) {
@@ -275,9 +307,24 @@ function createWindow() {
     },
   });
 
+  const sendWindowState = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    try {
+      mainWindow.webContents.send('window:state', {
+        maximized: mainWindow.isMaximized(),
+      });
+    } catch {
+      /* ignore */
+    }
+  };
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
+    sendWindowState();
   });
+  mainWindow.on('maximize', sendWindowState);
+  mainWindow.on('unmaximize', sendWindowState);
+  mainWindow.on('enter-full-screen', sendWindowState);
+  mainWindow.on('leave-full-screen', sendWindowState);
 
   mainWindow.on('close', (e) => {
     if (allowQuit) return;
@@ -353,6 +400,10 @@ ipcMain.handle('app:minimize', async () => {
     mainWindow.minimize();
   }
 });
+
+ipcMain.handle('app:window-state', async () => ({
+  maximized: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isMaximized()),
+}));
 
 ipcMain.handle('app:set-tray-minimize', async (_e, enabled) => {
   minimizeToTray = Boolean(enabled);
