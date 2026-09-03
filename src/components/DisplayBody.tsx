@@ -70,13 +70,17 @@ export function DisplayBody({ store, projectId }: Props) {
 
   useEffect(() => {
     if (!active || active.kind === 'link') return;
-    if (active.displaySrc || active.loadError) return;
+    const preview = active.displaySrc || '';
+    if (preview.startsWith('data:') || preview.startsWith('butler-media:')) return;
+    if (active.loadError && !preview) return;
     if (!window.butler?.mediaResolve) return;
-    if (!/^https?:\/\//i.test(active.src)) return;
+    const toResolve = active.src || active.displaySrc;
+    if (!toResolve) return;
+    if (toResolve.startsWith('data:') || toResolve.startsWith('butler-media:')) return;
     let cancelled = false;
     setResolving(true);
     void (async () => {
-      const r = await window.butler!.mediaResolve!(active.src);
+      const r = await window.butler!.mediaResolve!(toResolve);
       if (cancelled) return;
       setResolving(false);
       if (r.ok && r.src) {

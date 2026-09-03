@@ -45,8 +45,49 @@ contextBridge.exposeInMainWorld('butler', {
   mediaOpenExternal: (url) => ipcRenderer.invoke('media:open-external', url),
   notify: (payload) => ipcRenderer.invoke('notify:show', payload),
   diagnostics: () => ipcRenderer.invoke('diagnostics:copy'),
-  /** Play Leo TTS via main process (reliable Windows audio, not browser HTMLAudio). */
-  leoSpeak: (apiKey, text) => ipcRenderer.invoke('leo:speak', { apiKey, text }),
+  hasKey: () => ipcRenderer.invoke('secrets:has'),
+  setKey: (key) => ipcRenderer.invoke('secrets:set', { key }),
+  clearKey: () => ipcRenderer.invoke('secrets:clear'),
+  testKey: () => ipcRenderer.invoke('secrets:test'),
+  onSecretsChanged: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on('secrets:changed', handler);
+    return () => ipcRenderer.removeListener('secrets:changed', handler);
+  },
+  xaiChatStream: async (opts) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const handler = (_e, payload) => {
+      if (!payload || payload.requestId !== requestId) return;
+      if (payload.kind === 'reasoning') opts.onReasoning?.(payload.full, payload.delta);
+      if (payload.kind === 'content') opts.onContent?.(payload.full, payload.delta);
+    };
+    ipcRenderer.on('xai:chat-chunk', handler);
+    const abort = () => ipcRenderer.invoke('xai:chat-abort', { requestId });
+    if (opts.signal) {
+      if (opts.signal.aborted) {
+        ipcRenderer.removeListener('xai:chat-chunk', handler);
+        await abort();
+        return { ok: false, error: 'Cancelled' };
+      }
+      opts.signal.addEventListener('abort', abort, { once: true });
+    }
+    try {
+      return await ipcRenderer.invoke('xai:chat-stream', {
+        requestId,
+        messages: opts.messages,
+        model: opts.model,
+      });
+    } finally {
+      ipcRenderer.removeListener('xai:chat-chunk', handler);
+    }
+  },
+  generateImage: (prompt) => ipcRenderer.invoke('xai:image', { prompt }),
+  transcribe: (payload) => ipcRenderer.invoke('xai:stt', payload),
+  /** Play Leo TTS via main process. Uses the key stored in main, not a renderer token. */
+  leoSpeak: (textOrKey, maybeText) => {
+    const text = typeof maybeText === 'string' ? maybeText : textOrKey;
+    return ipcRenderer.invoke('leo:speak', { text });
+  },
   leoStop: () => ipcRenderer.invoke('leo:stop'),
   /** phase: 'start' when audio actually plays; 'end' when finished/stopped */
   onLeoAudio: (cb) => {

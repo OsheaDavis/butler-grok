@@ -26,12 +26,11 @@ export function stopLeoAudio() {
  * onStart fires only when audio actually begins (not during TTS download).
  */
 export async function speakWithLeo(
-  apiKey: string,
+  apiKey: string | undefined,
   text: string,
   opts?: { onStart?: () => void; onEnd?: () => void; onError?: (msg: string) => void }
 ): Promise<{ ok: true; cancelled?: boolean } | { ok: false; error: string }> {
-  const key = apiKey.trim();
-  if (!key) return { ok: false, error: 'No API key' };
+  const key = (apiKey || '').trim();
 
   const clean = text
     .replace(/\*\*/g, '')
@@ -80,7 +79,7 @@ export async function speakWithLeo(
 
     try {
       // Do NOT call onStart here — wait for LEO_PLAY_START from main
-      const r = await window.butler.leoSpeak(key, clean);
+      const r = await window.butler.leoSpeak(clean);
       unsub?.();
       if (r.ok) {
         notifyEnd();
@@ -103,6 +102,8 @@ export async function speakWithLeo(
   }
 
   // --- Browser / non-Electron fallback ---
+  if (!key) return { ok: false, error: 'No API key' };
+
   try {
     const res = await fetch(XAI_TTS, {
       method: 'POST',
@@ -215,9 +216,9 @@ export async function speakWithLeo(
 }
 
 /** Quick connectivity check for Leo TTS (short sample). */
-export async function testLeoTts(apiKey: string): Promise<{ ok: boolean; message: string }> {
-  const key = apiKey.trim();
-  if (!key) return { ok: false, message: 'Paste an API key first.' };
+export async function testLeoTts(apiKey?: string): Promise<{ ok: boolean; message: string }> {
+  const key = (apiKey || '').trim();
+  if (!window.butler?.leoSpeak && !key) return { ok: false, message: 'Paste an API key first.' };
 
   try {
     const r = await speakWithLeo(key, 'Hello. Butler Grok is ready. This is the Leo voice.');
