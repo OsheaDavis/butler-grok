@@ -86,13 +86,19 @@ const XAI_STT = 'https://api.x.ai/v1/stt';
 
 /** Transcribe a recorded audio blob with xAI Speech-to-Text. */
 export async function transcribeWithXai(
-  apiKey: string,
+  apiKey: string | undefined,
   blob: Blob,
   filename = 'speech.webm'
 ): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
-  const key = apiKey.trim();
-  if (!key) return { ok: false, error: 'No API key for speech recognition.' };
   if (!blob || blob.size < 200) return { ok: false, error: 'Recording too short — try again.' };
+
+  if (window.butler?.transcribe) {
+    const data = await blob.arrayBuffer();
+    return window.butler.transcribe({ mime: blob.type, filename, data });
+  }
+
+  const key = (apiKey || '').trim();
+  if (!key) return { ok: false, error: 'No API key for speech recognition.' };
 
   try {
     const form = new FormData();

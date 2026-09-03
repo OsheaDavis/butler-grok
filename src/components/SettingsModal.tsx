@@ -99,12 +99,12 @@ export function SettingsModal({ store }: { store: AppStore }) {
                   type="button"
                   className="btn primary"
                   onClick={async () => {
-                    if (!s.apiKey.trim()) {
+                    if (!s.apiKey.trim() && !store.hasApiKey) {
                       setTestMsg('Paste a key first.');
                       return;
                     }
                     setTestMsg('Testing connection to xAI…');
-                    const r = await testXaiKey(s.apiKey);
+                    const r = await testXaiKey();
                     setTestMsg(r.message);
                     store.showToast(r.ok ? 'API key works — saved on this PC only.' : 'API test failed.');
                   }}
@@ -157,12 +157,12 @@ export function SettingsModal({ store }: { store: AppStore }) {
                 type="button"
                 className="btn primary"
                 onClick={async () => {
-                  if (!s.apiKey.trim()) {
+                  if (!s.apiKey.trim() && !store.hasApiKey) {
                     store.showToast('Paste an API key first.');
                     return;
                   }
                   store.showToast('Testing Leo voice…');
-                  const r = await testLeoTts(s.apiKey);
+                  const r = await testLeoTts();
                   store.showToast(r.message);
                 }}
               >
@@ -232,7 +232,7 @@ export function SettingsModal({ store }: { store: AppStore }) {
           <h3>Data & privacy</h3>
           <p className="muted">
             Chats, projects, tasks, and settings stay on this computer under the Data folder. API keys are
-            never uploaded by this app except when you use cloud Mode B/C to call xAI.
+            encrypted by the OS on this PC (not stored in JSON) and only sent to xAI when you use Mode B/C.
           </p>
           <div className="row-actions">
             <button

@@ -90,7 +90,7 @@ User chats, settings, and media cache are **local** and **gitignored**:
 2. Else legacy: `C:\Grok Build\Butler Grok\Data\` (if that tree already exists)  
 3. Else: Electron `userData\Data\` (new contributors)
 
-Do not upload `Data/` — it may contain keys and personal chats.
+Do not upload `Data/` — it may contain personal chats. API keys are stored separately via OS encryption, not in `settings.json`.
 
 ---
 
@@ -132,9 +132,9 @@ If you use **Grok Build** as your coding agent, point it at this repo and `PROJE
 
 ## Security & privacy
 
-- API keys stay in local Settings / `Data/`  
+- API keys are encrypted with Electron `safeStorage` under userData (not written to `Data/*.json`)  
 - `.gitignore` excludes `Data/`, `.env`, build outputs  
-- Review your own `Data/settings.json` before any backup you share  
+- Review your own `Data/` folder before any backup you share; keys are not in `settings.json` after this version  
 
 ---
 

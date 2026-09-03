@@ -38,7 +38,7 @@ Windows **Electron + React + Vite** app: a butler-themed desk for Grok Build and
 
 ## Architecture reminders
 
-- Renderer must not hold secrets in git; keys in Settings → local JSON under Data/  
+- Renderer must not hold secrets in git; xAI keys live in Electron `safeStorage` (not `Data/*.json`)  
 - Prefer small PRs; keep language simple in UI strings  
 
 ## Disclaimer

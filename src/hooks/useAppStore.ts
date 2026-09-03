@@ -49,6 +49,7 @@ import {
   detectImagePrompt,
   generateXaiImage,
 } from '../lib/xaiImage';
+import { API_KEY_MASK, isApiKeyMask } from '../lib/apiKeyUi';
 
 const SETTINGS_FILE = 'settings.json';
 const DATA_FILE = 'appdata.json';
@@ -128,6 +129,9 @@ export function useAppStore() {
   const [chatBusy, setChatBusy] = useState(false);
   const [apiOk, setApiOk] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
+  const [hasApiKey, setHasApiKey] = useState(false);
+  const hasApiKeyRef = useRef(false);
+  hasApiKeyRef.current = hasApiKey;
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settingsRef = useRef(settings);
@@ -173,7 +177,7 @@ export function useAppStore() {
     const s = settingsRef.current;
     const d = dataRef.current;
     if (window.butler) {
-      await window.butler.save(SETTINGS_FILE, s);
+      await window.butler.save(SETTINGS_FILE, { ...s, apiKey: '' });
       await window.butler.save(DATA_FILE, d);
     } else {
       browserFallbackSave(SETTINGS_FILE, s);
@@ -201,10 +205,19 @@ export function useAppStore() {
         if (!cancelled) setAppInfo({ version: info.version, dataDir: info.dataDir });
         settingsRes = await window.butler.load(SETTINGS_FILE, DEFAULT_SETTINGS);
         dataRes = await window.butler.load(DATA_FILE, DEFAULT_APP_DATA);
+        const stored = await window.butler.hasKey?.();
+        if (!cancelled && stored?.hasKey) {
+          setHasApiKey(true);
+          hasApiKeyRef.current = true;
+        }
       } else {
         settingsRes = browserFallbackLoad(SETTINGS_FILE, DEFAULT_SETTINGS);
         dataRes = browserFallbackLoad(DATA_FILE, DEFAULT_APP_DATA);
         setAppInfo({ version: '0.1.0', dataDir: '(browser)' });
+        if (settingsRes.data.apiKey?.trim()) {
+          setHasApiKey(true);
+          hasApiKeyRef.current = true;
+        }
       }
 
       if (cancelled) return;
@@ -213,9 +226,11 @@ export function useAppStore() {
       const needsLayoutReset =
         (settingsRes.data.layoutVersion || 0) < LAYOUT_VERSION ||
         !settingsRes.data.homeTiles?.length;
+      const storedHasKey = Boolean(hasApiKeyRef.current);
       const mergedSettings: Settings = {
         ...DEFAULT_SETTINGS,
         ...settingsRes.data,
+        apiKey: storedHasKey ? API_KEY_MASK : '',
         layoutVersion: LAYOUT_VERSION,
         chatHeight:
           settingsRes.data.chatHeight ||
@@ -240,8 +255,8 @@ export function useAppStore() {
       setSettings(mergedSettings);
       setData(mergedData);
       setFirstRunOpen(!mergedSettings.firstRunDone);
-      setLeoReady(Boolean(mergedSettings.apiKey) && mergedSettings.connectionMode !== 'A');
-      setApiOk(Boolean(mergedSettings.apiKey) && mergedSettings.connectionMode !== 'A');
+      setLeoReady(storedHasKey && mergedSettings.connectionMode !== 'A');
+      setApiOk(storedHasKey && mergedSettings.connectionMode !== 'A');
       if (window.butler) {
         void window.butler.setTrayMinimize(mergedSettings.minimizeToTray);
         void window.butler.setLoginItem(mergedSettings.startWithWindows);
@@ -271,6 +286,22 @@ export function useAppStore() {
       if (typeof state.retainedThinking === 'string') {
         setRetainedThinking(state.retainedThinking);
       }
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!window.butler?.onSecretsChanged) return;
+    return window.butler.onSecretsChanged((payload) => {
+      const next = Boolean(payload?.hasKey);
+      setHasApiKey(next);
+      hasApiKeyRef.current = next;
+      setSettings((s) => {
+        if (next) {
+          if (s.apiKey && !isApiKeyMask(s.apiKey)) return s;
+          return { ...s, apiKey: API_KEY_MASK };
+        }
+        return isApiKeyMask(s.apiKey) ? { ...s, apiKey: '' } : s;
+      });
     });
   }, []);
 
@@ -350,10 +381,10 @@ export function useAppStore() {
   }, [refreshGrokStatus]);
 
   useEffect(() => {
-    const cloud = Boolean(settings.apiKey) && settings.connectionMode !== 'A';
+    const cloud = hasApiKey && settings.connectionMode !== 'A';
     setLeoReady(cloud);
     setApiOk(cloud);
-  }, [settings.apiKey, settings.connectionMode]);
+  }, [hasApiKey, settings.connectionMode]);
 
   // Connection banner (simple, not noisy)
   useEffect(() => {
@@ -361,18 +392,41 @@ export function useAppStore() {
     const mode = settings.connectionMode;
     if (mode === 'A' && !grokConnected) {
       setBanner('Grok Build not detected. Click Start Grok, or switch to Mode B/C in Settings.');
-    } else if ((mode === 'B' || mode === 'C') && !settings.apiKey && !settings.demoMode) {
+    } else if ((mode === 'B' || mode === 'C') && !hasApiKey && !settings.demoMode) {
       setBanner('Cloud mode needs an xAI API key in Settings ⚙');
     } else if (mode === 'C' && !grokConnected) {
       setBanner('Mode C: API ready for chat; Grok Build offline for PC work tasks.');
     } else {
       setBanner(null);
     }
-  }, [ready, settings.connectionMode, settings.apiKey, settings.demoMode, grokConnected]);
+  }, [ready, settings.connectionMode, hasApiKey, settings.demoMode, grokConnected]);
 
   const updateSettings = useCallback((patch: Partial<Settings>) => {
     setSettings((s) => ({ ...s, ...patch }));
-  }, []);
+    if (!Object.prototype.hasOwnProperty.call(patch, 'apiKey')) return;
+    const v = String(patch.apiKey || '').trim();
+    if (isApiKeyMask(v)) return;
+    if (!window.butler?.setKey) {
+      setHasApiKey(Boolean(v));
+      hasApiKeyRef.current = Boolean(v);
+      return;
+    }
+    if (!v) {
+      setHasApiKey(false);
+      hasApiKeyRef.current = false;
+      void window.butler.clearKey?.();
+      return;
+    }
+    setHasApiKey(true);
+    hasApiKeyRef.current = true;
+    void window.butler.setKey(v).then((r) => {
+      if (!r?.ok) {
+        setHasApiKey(false);
+        hasApiKeyRef.current = false;
+        showToast(r?.error || 'Could not save API key.');
+      }
+    });
+  }, [showToast]);
 
   const updateData = useCallback((patch: Partial<AppData> | ((d: AppData) => AppData)) => {
     setData((d) => (typeof patch === 'function' ? patch(d) : { ...d, ...patch }));
@@ -674,7 +728,7 @@ export function useAppStore() {
     }
 
     const canLeo =
-      Boolean(s.apiKey.trim()) && (s.connectionMode === 'B' || s.connectionMode === 'C');
+      hasApiKeyRef.current && (s.connectionMode === 'B' || s.connectionMode === 'C');
 
     // Stream TTS in main as bytes arrive; mouth/VU still wait for real LEO_PLAY_START
 
@@ -720,7 +774,7 @@ export function useAppStore() {
           /* ignore */
         }
       }
-      void speakWithLeo(s.apiKey, spoken, {
+      void speakWithLeo(undefined, spoken, {
         onStart: markStart,
         onEnd: markEnd,
         onError: (msg) => {
@@ -1156,7 +1210,7 @@ export function useAppStore() {
         const canCloud =
           !s.demoMode &&
           (s.connectionMode === 'B' || s.connectionMode === 'C') &&
-          Boolean(s.apiKey.trim());
+          hasApiKeyRef.current;
         setLiveThinking(
           attachment
             ? 'Recreating from your selected Display image…'
@@ -1175,7 +1229,7 @@ export function useAppStore() {
         const userVisible = attachment
           ? `${trimmed}\n\n_Using attached Display ${attachment.kind}: **${attachment.title}**_\n\n![Attached reference](${attachment.displaySrc || attachment.src})`
           : trimmed;
-        const gen = await generateXaiImage(s.apiKey, imagePrompt);
+        const gen = await generateXaiImage(undefined, imagePrompt);
         if (gen.ok) {
           const reply = attachment
             ? `Here’s a new version based on **your selected image** (“${attachment.title}”), with your changes:\n\n![Generated](${gen.url})\n\n_Model: ${gen.model}_\n\n_Reference was attached from Display so we know which one you meant._`
@@ -1227,7 +1281,7 @@ export function useAppStore() {
       const canCloud =
         !s.demoMode &&
         (s.connectionMode === 'B' || s.connectionMode === 'C') &&
-        Boolean(s.apiKey.trim());
+        hasApiKeyRef.current;
 
       let reply: string;
       let thinking = '';
@@ -1327,7 +1381,6 @@ export function useAppStore() {
 
         const streamingSpeech = beginStreamingSpeech();
         const result = await xaiChatCompletionStream({
-          apiKey: s.apiKey,
           messages: [
             { role: 'system', content: system },
             ...history.filter((m) => m.role !== 'system'),
@@ -1527,7 +1580,7 @@ export function useAppStore() {
             id: uid('disp'),
             kind,
             src,
-            displaySrc: src.startsWith('http') ? undefined : src.startsWith('file:') ? src : `file:///${src.replace(/\\/g, '/')}`,
+            displaySrc: src.startsWith('data:') ? src : undefined,
             title: name,
             createdAt: now,
             source: 'manual' as const,
@@ -2174,6 +2227,7 @@ export function useAppStore() {
     appInfo,
     persist,
     apiOk,
+    hasApiKey,
     banner,
     setBanner,
     addDisplayFromUrl,

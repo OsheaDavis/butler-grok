@@ -9,8 +9,11 @@ const XAI_BASE = 'https://api.x.ai/v1';
 /** Prefer a current flagship; fall back list if model missing */
 const MODEL_CANDIDATES = ['grok-4.5', 'grok-4', 'grok-3', 'grok-2-latest'];
 
-export async function testXaiKey(apiKey: string): Promise<{ ok: boolean; message: string }> {
-  if (!apiKey.trim()) return { ok: false, message: 'No API key provided.' };
+export async function testXaiKey(apiKey?: string): Promise<{ ok: boolean; message: string }> {
+  if (window.butler?.testKey) {
+    return window.butler.testKey();
+  }
+  if (!apiKey?.trim()) return { ok: false, message: 'No API key provided.' };
   try {
     const res = await fetch(`${XAI_BASE}/models`, {
       headers: { Authorization: `Bearer ${apiKey.trim()}` },
@@ -27,11 +30,19 @@ export async function testXaiKey(apiKey: string): Promise<{ ok: boolean; message
 }
 
 export async function xaiChatCompletion(opts: {
-  apiKey: string;
+  apiKey?: string;
   messages: ApiMessage[];
   model?: string;
 }): Promise<{ ok: true; content: string; model: string } | { ok: false; error: string }> {
-  const key = opts.apiKey.trim();
+  if (window.butler?.xaiChatStream) {
+    const streamed = await window.butler.xaiChatStream({
+      messages: opts.messages,
+      model: opts.model,
+    });
+    if (!streamed.ok) return streamed;
+    return { ok: true, content: streamed.content, model: streamed.model };
+  }
+  const key = (opts.apiKey || '').trim();
   if (!key) return { ok: false, error: 'No API key. Add one in Settings (Mode B or C).' };
 
   const models = opts.model ? [opts.model, ...MODEL_CANDIDATES] : MODEL_CANDIDATES;
@@ -90,7 +101,7 @@ export type StreamHandlers = {
  */
 export async function xaiChatCompletionStream(
   opts: {
-    apiKey: string;
+    apiKey?: string;
     messages: ApiMessage[];
     model?: string;
   } & StreamHandlers
@@ -98,7 +109,16 @@ export async function xaiChatCompletionStream(
   | { ok: true; content: string; thinking: string; model: string }
   | { ok: false; error: string }
 > {
-  const key = opts.apiKey.trim();
+  if (window.butler?.xaiChatStream) {
+    return window.butler.xaiChatStream({
+      messages: opts.messages,
+      model: opts.model,
+      onReasoning: opts.onReasoning,
+      onContent: opts.onContent,
+      signal: opts.signal,
+    });
+  }
+  const key = (opts.apiKey || '').trim();
   if (!key) return { ok: false, error: 'No API key. Add one in Settings (Mode B or C).' };
 
   const models = opts.model ? [opts.model, ...MODEL_CANDIDATES] : MODEL_CANDIDATES;

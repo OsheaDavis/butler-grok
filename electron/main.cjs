@@ -11,6 +11,9 @@ const {
   session,
   clipboard,
   screen,
+  protocol,
+  safeStorage,
+  net,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -27,6 +30,24 @@ const {
   closeLeoStreamServer,
   buildLeoMediaPlayerScript,
 } = require('./leoStream.cjs');
+const { ALLOWED_STORAGE_FILES, resolveStoragePath } = require('./storagePath.cjs');
+const {
+  validateGrokCliArgs,
+  isAllowedPluginName,
+  isAllowedPluginSource,
+} = require('./grokCliAllowlist.cjs');
+const {
+  initSecrets,
+  hasApiKey,
+  setApiKey,
+  clearApiKey,
+  stripApiKeyFields,
+  migrateAndStripSecrets,
+} = require('./secrets.cjs');
+const xaiMain = require('./xaiMain.cjs');
+const mediaProtocol = require('./mediaProtocol.cjs');
+
+mediaProtocol.registerPrivilegedScheme(protocol);
 
 const isDev = !app.isPackaged;
 const APP_ROOT = isDev ? path.join(__dirname, '..') : path.dirname(app.getPath('exe'));
@@ -161,10 +182,9 @@ function openPanelWindow(panelId) {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
-      // Display panel loads remote/local media; Leo TTS after async chat
+      sandbox: true,
       autoplayPolicy: 'no-user-gesture-required',
-      webSecurity: false,
+      webSecurity: true,
     },
   });
 
@@ -346,10 +366,9 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
-      // Display panel loads remote/local media; Leo TTS after async chat
+      sandbox: true,
       autoplayPolicy: 'no-user-gesture-required',
-      webSecurity: false,
+      webSecurity: true,
     },
   });
 
@@ -406,6 +425,11 @@ function allowMediaPermissions() {
 
 app.whenReady().then(() => {
   ensureDataDir();
+  initSecrets({
+    filePath: path.join(app.getPath('userData'), 'xai-api-key.enc'),
+    safeStorage,
+  });
+  mediaProtocol.registerHandler(protocol, net, DATA_DIR);
   allowMediaPermissions();
   createWindow();
   createTray();
@@ -454,13 +478,32 @@ ipcMain.handle('app:window-state', async () => getWindowStatePayload(mainWindow)
 
 ipcMain.handle('storage:load', async (_e, fileName, defaults) => {
   ensureDataDir();
-  const result = readJsonWithBackup(dataPath(fileName), defaults);
-  if (String(fileName) !== 'appdata.json') return result;
-  const seeded = seedAppDataIfNeeded(result.data, defaults);
-  if (seeded.changed) {
-    atomicWriteJson(dataPath(fileName), seeded.data);
+  const resolved = resolveStoragePath(DATA_DIR, fileName);
+  if (!resolved.ok) {
+    return { data: defaults, recovered: false, error: resolved.error };
   }
-  return { data: seeded.data, recovered: result.recovered };
+  const result = readJsonWithBackup(resolved.path, defaults);
+  const migrated = migrateAndStripSecrets(result.data);
+  if (migrated.migrated) {
+    try {
+      atomicWriteJson(resolved.path, migrated.data);
+    } catch {
+      /* keep serving stripped data even if rewrite fails */
+    }
+  }
+  let data = migrated.data;
+  if (String(resolved.fileName) === 'appdata.json') {
+    const seeded = seedAppDataIfNeeded(data, defaults);
+    if (seeded.changed) {
+      try {
+        atomicWriteJson(resolved.path, seeded.data);
+      } catch {
+        /* keep serving seeded data even if rewrite fails */
+      }
+    }
+    data = seeded.data;
+  }
+  return { data, recovered: result.recovered };
 });
 
 ipcMain.handle('app:set-tray-minimize', async (_e, enabled) => {
@@ -510,9 +553,12 @@ function broadcastAll(channel, payload, exceptWebContentsId) {
 
 ipcMain.handle('storage:save', async (e, fileName, data) => {
   ensureDataDir();
-  atomicWriteJson(dataPath(fileName), data);
+  const resolved = resolveStoragePath(DATA_DIR, fileName);
+  if (!resolved.ok) return { ok: false, error: resolved.error };
+  const migrated = migrateAndStripSecrets(data);
+  atomicWriteJson(resolved.path, migrated.data);
   // Sync other windows only (not the saver — avoids reload/save loops)
-  broadcastAll('storage:changed', { fileName: String(fileName) }, e.sender.id);
+  broadcastAll('storage:changed', { fileName: resolved.fileName }, e.sender.id);
   return { ok: true };
 });
 
@@ -531,11 +577,12 @@ ipcMain.handle('storage:export-backup', async () => {
     filters: [{ name: 'JSON', extensions: ['json'] }],
   });
   if (canceled || !filePath) return { ok: false };
-  const files = fs.readdirSync(DATA_DIR).filter((f) => f.endsWith('.json'));
+  const files = fs.readdirSync(DATA_DIR).filter((f) => ALLOWED_STORAGE_FILES.has(f));
   const bundle = { exportedAt: new Date().toISOString(), version: VERSION, files: {} };
   for (const f of files) {
     try {
-      bundle.files[f] = JSON.parse(fs.readFileSync(path.join(DATA_DIR, f), 'utf8'));
+      const parsed = JSON.parse(fs.readFileSync(path.join(DATA_DIR, f), 'utf8'));
+      bundle.files[f] = stripApiKeyFields(parsed);
     } catch {
       /* skip */
     }
@@ -556,7 +603,10 @@ ipcMain.handle('storage:import-backup', async () => {
     if (!bundle.files) return { ok: false, error: 'Invalid backup file' };
     ensureDataDir();
     for (const [name, data] of Object.entries(bundle.files)) {
-      atomicWriteJson(dataPath(name), data);
+      const resolved = resolveStoragePath(DATA_DIR, name);
+      if (!resolved.ok) continue;
+      const migrated = migrateAndStripSecrets(data);
+      atomicWriteJson(resolved.path, migrated.data);
     }
     return { ok: true };
   } catch (err) {
@@ -595,7 +645,12 @@ ipcMain.handle('grok:start', async () => {
  */
 ipcMain.handle('grok:open-terminal', async (_e, payload) => {
   const kind = String(payload?.kind || 'grok');
-  const extraArgs = String(payload?.extraArgs || '').trim();
+  const extraArgsRaw = String(payload?.extraArgs || '').trim();
+  const extraArgs =
+    (kind === 'plugin-install' && isAllowedPluginSource(extraArgsRaw)) ||
+    (kind === 'plugin-update' && isAllowedPluginName(extraArgsRaw))
+      ? extraArgsRaw
+      : '';
   const grokExe = resolveGrokExe();
   const grokDir = path.dirname(grokExe);
 
@@ -798,6 +853,12 @@ ipcMain.handle('media:save', async (_e, payload) => {
       else if (mime.includes('mp4')) ext = 'mp4';
       else if (mime.includes('webm')) ext = 'webm';
       buffer = Buffer.from(match[2], 'base64');
+    } else if (src.startsWith('butler-media:')) {
+      const local = mediaProtocol.localPathFromButlerMedia(DATA_DIR, src);
+      if (!local) return { ok: false, error: 'Cached media not found' };
+      buffer = fs.readFileSync(local);
+      const pathGuess = path.extname(local).replace('.', '');
+      if (pathGuess) ext = pathGuess;
     } else if (src.startsWith('http://') || src.startsWith('https://')) {
       const res = await fetch(src);
       if (!res.ok) return { ok: false, error: `Download failed (${res.status})` };
@@ -854,45 +915,49 @@ ipcMain.handle('media:save', async (_e, payload) => {
 });
 
 /**
- * Download remote media into Data/media-cache and return a local file URL
- * so Display can show hotlink-protected images reliably.
+ * Download remote media into Data/media-cache and return a butler-media: URL
+ * (or a data: URL for modest images) so Display works with webSecurity on.
  */
 ipcMain.handle('media:resolve', async (_e, payload) => {
   const src = String(payload?.src || '').trim();
   if (!src) return { ok: false, error: 'No source' };
 
   try {
-    // Already local / data / file
     if (src.startsWith('data:')) return { ok: true, src, cached: false };
-    if (src.startsWith('file:')) return { ok: true, src, cached: false };
+    if (src.startsWith('butler-media:')) {
+      const local = mediaProtocol.localPathFromButlerMedia(DATA_DIR, src);
+      if (!local) return { ok: false, error: 'Cached media not found', src };
+      return { ok: true, src, cached: true, localPath: local };
+    }
+    if (src.startsWith('file:')) {
+      return mediaProtocol.importLocalFile(DATA_DIR, mediaProtocol.fileUrlToPathSafe(src));
+    }
     if (fs.existsSync(src)) {
-      return { ok: true, src: pathToFileUrl(src), cached: false, localPath: src };
+      return mediaProtocol.importLocalFile(DATA_DIR, src);
     }
 
     if (!/^https?:\/\//i.test(src)) {
       return { ok: false, error: 'Not a remote URL' };
     }
 
-    const cacheDir = path.join(DATA_DIR, 'media-cache');
+    const cacheDir = mediaProtocol.cacheDir(DATA_DIR);
     if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
 
     const crypto = require('crypto');
     const hash = crypto.createHash('sha1').update(src).digest('hex').slice(0, 16);
-    // Prefer extension from URL
     let ext = 'bin';
     const pathPart = src.split('?')[0];
     const m = /\.([a-z0-9]{2,5})$/i.exec(pathPart);
     if (m) ext = m[1].toLowerCase();
 
     const existing = fs.readdirSync(cacheDir).find((f) => f.startsWith(hash + '.'));
-    if (existing) {
+    if (existing && mediaProtocol.isSafeCacheName(existing)) {
       const full = path.join(cacheDir, existing);
-      return { ok: true, src: pathToFileUrl(full), cached: true, localPath: full };
+      return cachedMediaResult(full, existing);
     }
 
     const res = await fetch(src, {
       headers: {
-        // Some CDNs reject empty/default Electron user-agents
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
@@ -910,7 +975,6 @@ ipcMain.handle('media:resolve', async (_e, payload) => {
     else if (ct.includes('mp4')) ext = 'mp4';
     else if (ct.includes('webm')) ext = 'webm';
     else if (ct.includes('html')) {
-      // Page URL, not a direct image — keep original for external open
       return {
         ok: false,
         error: 'URL is a web page, not a direct image/video file',
@@ -922,39 +986,53 @@ ipcMain.handle('media:resolve', async (_e, payload) => {
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.length < 32) return { ok: false, error: 'Empty download', src };
 
-    const filePath = path.join(cacheDir, `${hash}.${ext}`);
-    fs.writeFileSync(filePath, buf);
-
-    // Prefer data: for images so CSP / webSecurity never blank the panel
-    if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'].includes(ext) && buf.length < 12_000_000) {
-      const mime =
-        ext === 'jpg' || ext === 'jpeg'
-          ? 'image/jpeg'
-          : ext === 'svg'
-            ? 'image/svg+xml'
-            : `image/${ext}`;
-      return {
-        ok: true,
-        src: `data:${mime};base64,${buf.toString('base64')}`,
-        cached: true,
-        localPath: filePath,
-      };
+    const safeExt = String(ext).toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 5) || 'bin';
+    const fileName = `${hash}.${safeExt}`;
+    if (!mediaProtocol.isSafeCacheName(fileName)) {
+      return { ok: false, error: 'Bad cache name', src };
     }
-
-    return { ok: true, src: pathToFileUrl(filePath), cached: true, localPath: filePath };
+    const filePath = path.join(cacheDir, fileName);
+    fs.writeFileSync(filePath, buf);
+    return cachedMediaResult(filePath, fileName, buf);
   } catch (e) {
     return { ok: false, error: String(e?.message || e), src };
   }
 });
 
-function pathToFileUrl(p) {
-  const resolved = path.resolve(p);
-  return 'file:///' + resolved.replace(/\\/g, '/');
+function cachedMediaResult(filePath, fileName, buf) {
+  const ext = path.extname(fileName).replace('.', '').toLowerCase();
+  const body = buf || fs.readFileSync(filePath);
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'].includes(ext) && body.length < 12_000_000) {
+    const mime =
+      ext === 'jpg' || ext === 'jpeg'
+        ? 'image/jpeg'
+        : ext === 'svg'
+          ? 'image/svg+xml'
+          : `image/${ext}`;
+    return {
+      ok: true,
+      src: `data:${mime};base64,${body.toString('base64')}`,
+      cached: true,
+      localPath: filePath,
+    };
+  }
+  return {
+    ok: true,
+    src: mediaProtocol.butlerMediaUrl(fileName),
+    cached: true,
+    localPath: filePath,
+  };
 }
 
 ipcMain.handle('media:open-external', async (_e, url) => {
   const u = String(url || '');
   if (!u) return { ok: false };
+  if (u.startsWith('butler-media:')) {
+    const local = mediaProtocol.localPathFromButlerMedia(DATA_DIR, u);
+    if (!local) return { ok: false };
+    await shell.openPath(local);
+    return { ok: true };
+  }
   if (u.startsWith('http') || u.startsWith('file:') || u.startsWith('data:')) {
     // data: URLs: write temp and open
     if (u.startsWith('data:')) {
@@ -986,8 +1064,11 @@ ipcMain.handle('media:open-external', async (_e, url) => {
  * Used for marketplace list/install/update and MCP helpers.
  */
 ipcMain.handle('grok:cli', async (_e, payload) => {
-  const args = Array.isArray(payload?.args) ? payload.args.map(String) : [];
-  if (!args.length) return { ok: false, code: -1, stdout: '', stderr: 'No args' };
+  const validated = validateGrokCliArgs(payload?.args);
+  if (!validated.ok) {
+    return { ok: false, code: -1, stdout: '', stderr: validated.error };
+  }
+  const args = validated.args;
 
   // Prefer full path — Electron's PATH often misses ~/.grok/bin
   const grokExe = resolveGrokExe();
@@ -1275,8 +1356,76 @@ ipcMain.handle('diagnostics:copy', async () => {
     chrome: process.versions.chrome,
     node: process.versions.node,
     time: new Date().toISOString(),
+    hasApiKey: hasApiKey(),
   };
   return JSON.stringify(info, null, 2);
+});
+
+function broadcastSecretsChanged() {
+  broadcastAll('secrets:changed', { hasKey: hasApiKey() });
+}
+
+ipcMain.handle('secrets:has', async () => ({ hasKey: hasApiKey() }));
+
+ipcMain.handle('secrets:set', async (_e, payload) => {
+  const key = String(payload?.key || '').trim();
+  const r = setApiKey(key);
+  if (r.ok) broadcastSecretsChanged();
+  return r;
+});
+
+ipcMain.handle('secrets:clear', async () => {
+  const r = clearApiKey();
+  broadcastSecretsChanged();
+  return r;
+});
+
+ipcMain.handle('secrets:test', async () => xaiMain.testStoredKey());
+
+ipcMain.handle('xai:image', async (_e, payload) => xaiMain.generateImage(payload?.prompt));
+
+ipcMain.handle('xai:stt', async (_e, payload) => xaiMain.transcribe(payload || {}));
+
+/** @type {Map<string, AbortController>} */
+const chatAborts = new Map();
+
+ipcMain.handle('xai:chat-abort', async (_e, payload) => {
+  const id = String(payload?.requestId || '');
+  const ac = chatAborts.get(id);
+  if (ac) ac.abort();
+  return { ok: true };
+});
+
+ipcMain.handle('xai:chat-stream', async (e, payload) => {
+  const requestId = String(payload?.requestId || '');
+  if (!requestId || requestId.length > 80) {
+    return { ok: false, error: 'Invalid stream request' };
+  }
+  const ac = new AbortController();
+  chatAborts.set(requestId, ac);
+  try {
+    return await xaiMain.chatCompletionStream({
+      messages: payload?.messages,
+      model: payload?.model,
+      signal: ac.signal,
+      onReasoning: (full, delta) => {
+        try {
+          e.sender.send('xai:chat-chunk', { requestId, kind: 'reasoning', full, delta });
+        } catch {
+          /* ignore */
+        }
+      },
+      onContent: (full, delta) => {
+        try {
+          e.sender.send('xai:chat-chunk', { requestId, kind: 'content', full, delta });
+        } catch {
+          /* ignore */
+        }
+      },
+    });
+  } finally {
+    chatAborts.delete(requestId);
+  }
 });
 
 /** @type {import('child_process').ChildProcess | null} */
@@ -1394,10 +1543,10 @@ function spawnLeoMediaPlayer(audioUrl, file, epoch) {
 /**
  * Fetch Leo TTS in the main process and play with Windows MediaPlayer.
  * Streams bytes to a localhost progressive URL so playback can start before
- * the full MP3 is on disk. Avoids Chromium HTMLAudioElement (autoplay / silence).
+ * the full MP3 is on disk. Uses the key stored in safeStorage — renderer
+ * must not pass a Bearer token. Avoids Chromium HTMLAudioElement.
  */
 ipcMain.handle('leo:speak', async (_e, payload) => {
-  const apiKey = String(payload?.apiKey || '').trim();
   const text = String(payload?.text || '')
     .replace(/\*\*/g, '')
     .replace(/#{1,6}\s/g, '')
@@ -1405,7 +1554,6 @@ ipcMain.handle('leo:speak', async (_e, payload) => {
     .trim()
     .slice(0, 4000);
 
-  if (!apiKey) return { ok: false, error: 'No API key' };
   if (!text) return { ok: false, error: 'Nothing to speak' };
 
   const epoch = ++leoSpeakEpoch;
@@ -1417,24 +1565,14 @@ ipcMain.handle('leo:speak', async (_e, payload) => {
   leoAbortController = ac;
 
   try {
-    const res = await fetch('https://api.x.ai/v1/tts', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      signal: ac.signal,
-      body: JSON.stringify({
-        text,
-        voice_id: 'leo',
-        language: 'en',
-      }),
-    });
-
-    if (!res.ok) {
-      const body = await res.text();
-      return { ok: false, error: `TTS ${res.status}: ${body.slice(0, 160)}` };
+    const tts = await xaiMain.openLeoTtsStream(text, ac.signal);
+    if (!tts.ok) {
+      if (tts.aborted || leoStopRequested || epoch !== leoSpeakEpoch) {
+        return { ok: true, cancelled: true };
+      }
+      return { ok: false, error: tts.error };
     }
+    const res = tts.response;
 
     if (leoStopRequested || epoch !== leoSpeakEpoch) {
       return { ok: true, cancelled: true };

@@ -7,10 +7,13 @@ const IMAGE_MODELS = ['grok-imagine-image-quality', 'grok-imagine-image'];
  * Returns a URL or data URL for Display.
  */
 export async function generateXaiImage(
-  apiKey: string,
+  apiKey: string | undefined,
   prompt: string
 ): Promise<{ ok: true; url: string; model: string } | { ok: false; error: string }> {
-  const key = apiKey.trim();
+  if (window.butler?.generateImage) {
+    return window.butler.generateImage(prompt);
+  }
+  const key = (apiKey || '').trim();
   if (!key) return { ok: false, error: 'No API key. Add one in Settings (Mode B or C).' };
   const p = prompt.trim();
   if (!p) return { ok: false, error: 'Empty image prompt.' };

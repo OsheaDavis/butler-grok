@@ -92,11 +92,11 @@ function ChatPanelBody({ store }: { store: AppStore }) {
       chatBusy={store.chatBusy}
       micOn={store.settings.micOn}
       onToggleMic={() => store.updateSettings({ micOn: !store.settings.micOn })}
-      apiKey={store.settings.apiKey}
+      hasApiKey={store.hasApiKey}
       useCloudStt={
         !store.settings.demoMode &&
         (store.settings.connectionMode === 'B' || store.settings.connectionMode === 'C') &&
-        Boolean(store.settings.apiKey.trim())
+        store.hasApiKey
       }
       onToast={store.showToast}
       liveThinking={store.liveThinking}
@@ -566,11 +566,11 @@ export default function App() {
         chatBusy={store.chatBusy}
         micOn={store.settings.micOn}
         onToggleMic={() => store.updateSettings({ micOn: !store.settings.micOn })}
-        apiKey={store.settings.apiKey}
+        hasApiKey={store.hasApiKey}
         useCloudStt={
           !store.settings.demoMode &&
           (store.settings.connectionMode === 'B' || store.settings.connectionMode === 'C') &&
-          Boolean(store.settings.apiKey.trim())
+          store.hasApiKey
         }
         onToast={store.showToast}
         chatHeight={chatH}
