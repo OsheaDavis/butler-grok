@@ -5,7 +5,6 @@ import { speakWithLeo } from './leoTts';
  * One clip at a time — a new speak would stop the current player.
  */
 export function createLeoSpeakQueue(opts: {
-  getApiKey: () => string;
   isCancelled: () => boolean;
   onFirstAudioStart: () => void;
   onQueueIdle: () => void;
@@ -50,7 +49,7 @@ export function createLeoSpeakQueue(opts: {
     const gen = generation;
     while (pending.length > 0 && gen === generation && !opts.isCancelled()) {
       const text = pending.shift()!;
-      const r = await speakWithLeo(opts.getApiKey(), text, {
+      const r = await speakWithLeo(undefined, text, {
         onStart: () => {
           if (gen !== generation || opts.isCancelled()) return;
           if (!heardAudio) {

@@ -253,7 +253,11 @@ async function transcribe(payload) {
   }
 }
 
-async function fetchLeoTtsBuffer(textRaw) {
+/**
+ * Open a Leo TTS HTTP stream. Caller must consume `response.body` progressively.
+ * Do not buffer the whole MP3 here — that kills first-audio latency.
+ */
+async function openLeoTtsStream(textRaw, signal) {
   const key = getApiKey();
   if (!key) return { ok: false, error: 'No API key' };
   const text = String(textRaw || '')
@@ -271,6 +275,7 @@ async function fetchLeoTtsBuffer(textRaw) {
         Authorization: `Bearer ${key}`,
         'Content-Type': 'application/json',
       },
+      signal,
       body: JSON.stringify({
         text,
         voice_id: 'leo',
@@ -281,10 +286,12 @@ async function fetchLeoTtsBuffer(textRaw) {
       const body = await res.text();
       return { ok: false, error: `TTS ${res.status}: ${body.slice(0, 160)}` };
     }
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length < 100) return { ok: false, error: 'Leo TTS returned empty audio' };
-    return { ok: true, buffer: buf };
+    if (!res.body) return { ok: false, error: 'Leo TTS returned no stream' };
+    return { ok: true, response: res };
   } catch (e) {
+    if (e && (e.name === 'AbortError' || signal?.aborted)) {
+      return { ok: false, aborted: true, error: 'Cancelled' };
+    }
     return { ok: false, error: String((e && e.message) || e) };
   }
 }
@@ -294,5 +301,5 @@ module.exports = {
   chatCompletionStream,
   generateImage,
   transcribe,
-  fetchLeoTtsBuffer,
+  openLeoTtsStream,
 };

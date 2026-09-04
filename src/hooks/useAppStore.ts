@@ -90,13 +90,11 @@ export function useAppStore() {
   const speechSpokenCharsRef = useRef(0);
   const speechActiveRef = useRef(false);
   const leoQueueHooksRef = useRef<{
-    getApiKey: () => string;
     isCancelled: () => boolean;
     onFirstAudioStart: () => void;
     onQueueIdle: () => void;
     onError: (msg: string) => void;
   }>({
-    getApiKey: () => '',
     isCancelled: () => false,
     onFirstAudioStart: () => {},
     onQueueIdle: () => {},
@@ -104,7 +102,6 @@ export function useAppStore() {
   });
   const leoQueueRef = useRef(
     createLeoSpeakQueue({
-      getApiKey: () => leoQueueHooksRef.current.getApiKey(),
       isCancelled: () => leoQueueHooksRef.current.isCancelled(),
       onFirstAudioStart: () => leoQueueHooksRef.current.onFirstAudioStart(),
       onQueueIdle: () => leoQueueHooksRef.current.onQueueIdle(),
@@ -145,7 +142,6 @@ export function useAppStore() {
   }, []);
 
   leoQueueHooksRef.current = {
-    getApiKey: () => settingsRef.current.apiKey,
     isCancelled: () => voiceCancelledRef.current,
     onFirstAudioStart: () => {
       if (voiceCancelledRef.current) return;
@@ -650,7 +646,7 @@ export function useAppStore() {
   const beginStreamingSpeech = useCallback(() => {
     const s = settingsRef.current;
     const canLeo =
-      Boolean(s.apiKey.trim()) &&
+      hasApiKeyRef.current &&
       (s.connectionMode === 'B' || s.connectionMode === 'C') &&
       s.butlerVoiceOn &&
       !s.muteSounds;

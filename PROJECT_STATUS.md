@@ -39,6 +39,7 @@ Windows **Electron + React + Vite** app: a butler-themed desk for Grok Build and
 ## Architecture reminders
 
 - Renderer must not hold secrets in git; xAI keys live in Electron `safeStorage` (not `Data/*.json`)  
+- Speak: main-process Leo streamer + `safeStorage` key via `getApiKey()`; renderer sends `{ text }` only  
 - Prefer small PRs; keep language simple in UI strings  
 
 ## Disclaimer
