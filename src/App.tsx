@@ -30,6 +30,7 @@ import {
   type PanelId,
   type StaticPanelId,
 } from './lib/types';
+import { LIMITS } from './lib/limits';
 
 const DEFAULT_FLOAT = { x: 40, y: 40, w: 440, h: 360 };
 
@@ -313,7 +314,7 @@ export default function App() {
         conversations: `${store.savedConversations.length}/20`,
         recent: `${store.recentConversations.length}/10`,
         tasks: `${listTasks(store.data).length}/10`,
-        projects: `${store.data.projects.length}/10`,
+        projects: `${store.data.projects.length}/${LIMITS.projects}`,
         currentlyOpen: `${store.data.workItems.filter((w) => w.status === 'running').length}`,
         marketplace: '·',
         display: `${(store.data.displayItems || []).filter((i) => !i.projectId).length}`,

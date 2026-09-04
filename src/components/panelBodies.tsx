@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react';
 import type { AppStore } from '../hooks/useAppStore';
 import { listTasks } from '../lib/types';
+import { LIMITS } from '../lib/limits';
 import { MiniButlerWave } from './MiniButlerWave';
 
 export function FoldersBody({ store }: { store: AppStore }) {
@@ -163,7 +164,7 @@ export function ProjectsBody({ store }: { store: AppStore }) {
               setName('');
             }}
           >
-            Add ({store.data.projects.length}/10)
+            Add ({store.data.projects.length}/{LIMITS.projects})
           </button>
         </div>
       </div>

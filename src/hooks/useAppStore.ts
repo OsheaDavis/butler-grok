@@ -663,7 +663,7 @@ export function useAppStore() {
         const existing = new Set(prev.map((p) => p.src.slice(0, 200)));
         const fresh = items.filter((i) => !existing.has(i.src.slice(0, 200)));
         if (!fresh.length) return d;
-        const displayItems = [...fresh, ...prev].slice(0, 80);
+        const displayItems = [...fresh, ...prev].slice(0, LIMITS.displayItems);
         return {
           ...d,
           displayItems,
@@ -1349,7 +1349,7 @@ export function useAppStore() {
             vote: i.vote || ('pending' as const),
           })),
           ...(d.displayItems || []),
-        ].slice(0, 80),
+        ].slice(0, LIMITS.displayItems),
         activeDisplayId: items[0].id,
       }));
       const pid = dataRef.current.activeProjectId;
@@ -1425,7 +1425,7 @@ export function useAppStore() {
             vote: 'pending' as const,
           })),
           ...(d.displayItems || []),
-        ].slice(0, 80),
+        ].slice(0, LIMITS.displayItems),
         activeDisplayId: items[0].id,
       }));
       const pid = dataRef.current.activeProjectId;
@@ -1470,8 +1470,8 @@ export function useAppStore() {
 
   const addProject = useCallback(
     (name: string) => {
-      if (dataRef.current.projects.length >= 10) {
-        showToast('Maximum 10 projects.');
+      if (dataRef.current.projects.length >= LIMITS.projects) {
+        showToast(`Maximum ${LIMITS.projects} projects.`);
         return;
       }
       const p: Project = {

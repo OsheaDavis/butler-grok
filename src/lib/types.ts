@@ -220,7 +220,7 @@ export const PANEL_META: Record<
     home: true,
   },
   tasks: { title: 'Tasks', short: 'Tasks', max: 10, subtitle: 'Reminders & work', home: true },
-  projects: { title: 'Projects', short: 'Projects', max: 10, subtitle: 'Long jobs', home: true },
+  projects: { title: 'Projects', short: 'Projects', max: 25, subtitle: 'Long jobs', home: true },
   currentlyOpen: {
     title: 'Currently Open',
     short: 'Open',
