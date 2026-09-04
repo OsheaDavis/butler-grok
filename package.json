@@ -1,6 +1,6 @@
 {
   "name": "butler-grok",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Butler Grok - friendlier unofficial Windows desktop GUI for Grok Build / xAI",
   "main": "electron/main.cjs",
   "author": "Butler Grok contributors",
@@ -34,7 +34,7 @@
   "build": {
     "appId": "com.butlergrok.app",
     "productName": "Butler Grok",
-    "copyright": "Copyright © Butler Grok contributors (third-party, not official xAI)",
+    "copyright": "Copyright \u00a9 Butler Grok contributors (third-party, not official xAI)",
     "directories": {
       "output": "release"
     },
@@ -90,3 +90,4 @@
     "wait-on": "^8.0.2"
   }
 }
+
