@@ -899,7 +899,7 @@ export function MarketplaceBody({ store }: { store: AppStore }) {
                       <div className="title">
                         {p.name}{' '}
                         <span className="meta" style={{ marginLeft: 6 }}>
-                          {installed ? 'âœ“ installed' : p.status || 'available'}
+                          {installed ? '✓ installed' : p.status || 'available'}
                           {p.version ? ` · v${p.version}` : ''}
                         </span>
                       </div>
