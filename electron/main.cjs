@@ -10,12 +10,14 @@ const {
   nativeImage,
   session,
   clipboard,
+  screen,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
 const { atomicWriteJson, readJsonWithBackup } = require('./storage.cjs');
+const { seedAppDataIfNeeded } = require('./sampleSeed.cjs');
 
 const isDev = !app.isPackaged;
 const APP_ROOT = isDev ? path.join(__dirname, '..') : path.dirname(app.getPath('exe'));
@@ -63,6 +65,41 @@ const PANEL_TITLES = {
 function panelWindowTitle(panelId) {
   if (String(panelId).startsWith('projdisp:')) return 'Project Display';
   return PANEL_TITLES[panelId] || panelId;
+}
+
+/**
+ * Windows maximized windows often report bounds larger than the work area,
+ * so the right-hand header (Update Grok / Leo / gear) is painted off-screen.
+ */
+function getWindowStatePayload(win) {
+  if (!win || win.isDestroyed()) {
+    return { maximized: false, insetTop: 0, insetRight: 0, insetBottom: 0, insetLeft: 0 };
+  }
+  const maximized = win.isMaximized() || win.isFullScreen();
+  if (!maximized) {
+    return { maximized: false, insetTop: 0, insetRight: 0, insetBottom: 0, insetLeft: 0 };
+  }
+  let insetTop = 0;
+  let insetRight = 0;
+  let insetBottom = 0;
+  let insetLeft = 0;
+  try {
+    const display = screen.getDisplayMatching(win.getBounds());
+    const wa = display.workArea;
+    const b = win.getBounds();
+    insetTop = Math.max(0, wa.y - b.y);
+    insetLeft = Math.max(0, wa.x - b.x);
+    insetRight = Math.max(0, b.x + b.width - (wa.x + wa.width));
+    insetBottom = Math.max(0, b.y + b.height - (wa.y + wa.height));
+  } catch {
+    /* keep zeros */
+  }
+  // Even when Electron reports a perfect fit, Win11 DWM still clips a few CSS px.
+  if (process.platform === 'win32') {
+    insetRight = Math.max(insetRight, 16);
+    insetTop = Math.max(insetTop, 8);
+  }
+  return { maximized: true, insetTop, insetRight, insetBottom, insetLeft };
 }
 
 /** Bring a panel in front of a maximized main window (Windows often hides new BrowserWindows). */
@@ -310,9 +347,7 @@ function createWindow() {
   const sendWindowState = () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     try {
-      mainWindow.webContents.send('window:state', {
-        maximized: mainWindow.isMaximized(),
-      });
+      mainWindow.webContents.send('window:state', getWindowStatePayload(mainWindow));
     } catch {
       /* ignore */
     }
@@ -325,6 +360,11 @@ function createWindow() {
   mainWindow.on('unmaximize', sendWindowState);
   mainWindow.on('enter-full-screen', sendWindowState);
   mainWindow.on('leave-full-screen', sendWindowState);
+  mainWindow.on('resize', () => {
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isMaximized()) {
+      sendWindowState();
+    }
+  });
 
   mainWindow.on('close', (e) => {
     if (allowQuit) return;
@@ -401,9 +441,18 @@ ipcMain.handle('app:minimize', async () => {
   }
 });
 
-ipcMain.handle('app:window-state', async () => ({
-  maximized: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isMaximized()),
-}));
+ipcMain.handle('app:window-state', async () => getWindowStatePayload(mainWindow));
+
+ipcMain.handle('storage:load', async (_e, fileName, defaults) => {
+  ensureDataDir();
+  const result = readJsonWithBackup(dataPath(fileName), defaults);
+  if (String(fileName) !== 'appdata.json') return result;
+  const seeded = seedAppDataIfNeeded(result.data, defaults);
+  if (seeded.changed) {
+    atomicWriteJson(dataPath(fileName), seeded.data);
+  }
+  return { data: seeded.data, recovered: result.recovered };
+});
 
 ipcMain.handle('app:set-tray-minimize', async (_e, enabled) => {
   minimizeToTray = Boolean(enabled);
@@ -430,11 +479,6 @@ ipcMain.handle('app:get-login-item', async () => {
   } catch {
     return { openAtLogin: false };
   }
-});
-
-ipcMain.handle('storage:load', async (_e, fileName, defaults) => {
-  ensureDataDir();
-  return readJsonWithBackup(dataPath(fileName), defaults);
 });
 
 function broadcastAll(channel, payload, exceptWebContentsId) {

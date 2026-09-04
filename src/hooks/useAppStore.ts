@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   DEFAULT_APP_DATA,
   DEFAULT_SETTINGS,
+  listTasks,
   mergeHomeTiles,
   type AppData,
   type ChatAttachment,
@@ -239,7 +240,10 @@ export function useAppStore() {
             normalizeAppDataDisplayAndProjects({
               ...DEFAULT_APP_DATA,
               ...res.data,
-              tasks: Array.isArray(res.data?.tasks) ? res.data.tasks : [],
+              tasks: listTasks(res.data),
+              sampleTasksApplied: Boolean(
+                (res.data as AppData | undefined)?.sampleTasksApplied
+              ),
             }) as AppData
           );
         } catch {
@@ -1802,12 +1806,12 @@ export function useAppStore() {
 
   const addTask = useCallback(
     (task: Omit<ScheduledTask, 'id'>) => {
-      if (dataRef.current.tasks.length >= 10) {
+      if (listTasks(dataRef.current).length >= 10) {
         showToast('Maximum 10 tasks.');
         return;
       }
       const t: ScheduledTask = { ...task, id: uid('task') };
-      setData((d) => ({ ...d, tasks: [...d.tasks, t] }));
+      setData((d) => ({ ...d, tasks: [...listTasks(d), t] }));
     },
     [showToast]
   );
@@ -1815,12 +1819,12 @@ export function useAppStore() {
   const updateTask = useCallback((id: string, patch: Partial<ScheduledTask>) => {
     setData((d) => ({
       ...d,
-      tasks: d.tasks.map((t) => (t.id === id ? { ...t, ...patch } : t)),
+      tasks: listTasks(d).map((t) => (t.id === id ? { ...t, ...patch } : t)),
     }));
   }, []);
 
   const removeTask = useCallback((id: string) => {
-    setData((d) => ({ ...d, tasks: d.tasks.filter((t) => t.id !== id) }));
+    setData((d) => ({ ...d, tasks: listTasks(d).filter((t) => t.id !== id) }));
   }, []);
 
   // Task scheduler tick
@@ -1828,7 +1832,7 @@ export function useAppStore() {
     if (!ready) return;
     const tick = () => {
       const now = Date.now();
-      const tasks = dataRef.current.tasks;
+      const tasks = listTasks(dataRef.current);
       for (const t of tasks) {
         if (!t.enabled) continue;
         const runAt = new Date(t.runAt).getTime();
@@ -1838,7 +1842,7 @@ export function useAppStore() {
         // Fire
         setData((d) => ({
           ...d,
-          tasks: d.tasks.map((x) =>
+          tasks: listTasks(d).map((x) =>
             x.id === t.id
               ? {
                   ...x,

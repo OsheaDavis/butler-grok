@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react';
 import type { AppStore } from '../hooks/useAppStore';
+import { listTasks } from '../lib/types';
 import { MiniButlerWave } from './MiniButlerWave';
 
 export function FoldersBody({ store }: { store: AppStore }) {
@@ -389,6 +390,7 @@ export function TasksBody({ store }: { store: AppStore }) {
     return d.toISOString().slice(0, 16);
   });
   const [prompt, setPrompt] = useState('');
+  const tasks = listTasks(store.data);
 
   return (
     <>
@@ -396,13 +398,13 @@ export function TasksBody({ store }: { store: AppStore }) {
         Up to 10 tasks. For <strong>work</strong> tasks you need <strong>Grok Build running</strong> and{' '}
         <strong>Butler Grok open</strong>. Closing the app stops all tasks.
       </p>
-      {!store.data.tasks.length ? (
+      {!tasks.length ? (
         <div className="empty" style={{ padding: 12 }}>
           No tasks yet.
         </div>
       ) : (
         <div className="list" style={{ marginBottom: 16 }}>
-          {store.data.tasks.map((t) => (
+          {tasks.map((t) => (
             <div key={t.id} className="list-item">
               {store.waveTaskId === t.id || t.type === 'remind' ? (
                 <MiniButlerWave title="Butler reminder" />
@@ -473,14 +475,14 @@ export function TasksBody({ store }: { store: AppStore }) {
           setPrompt('');
         }}
       >
-        Add task ({store.data.tasks.length}/10)
+        Add task ({tasks.length}/10)
       </button>
     </>
   );
 }
 
 export function CurrentlyOpenBody({ store }: { store: AppStore }) {
-  const upcoming = [...store.data.tasks]
+  const upcoming = [...listTasks(store.data)]
     .filter((t) => t.enabled)
     .sort((a, b) => a.runAt.localeCompare(b.runAt))
     .slice(0, 5);

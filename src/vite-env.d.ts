@@ -126,8 +126,22 @@ export interface ButlerAPI {
     }) => void
   ) => () => void;
   onStorageChanged: (cb: (payload: { fileName: string }) => void) => () => void;
-  onWindowState?: (cb: (state: { maximized: boolean }) => void) => () => void;
-  getWindowState?: () => Promise<{ maximized: boolean }>;
+  onWindowState?: (
+    cb: (state: {
+      maximized: boolean;
+      insetTop?: number;
+      insetRight?: number;
+      insetBottom?: number;
+      insetLeft?: number;
+    }) => void
+  ) => () => void;
+  getWindowState?: () => Promise<{
+    maximized: boolean;
+    insetTop?: number;
+    insetRight?: number;
+    insetBottom?: number;
+    insetLeft?: number;
+  }>;
 }
 
 declare global {

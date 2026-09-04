@@ -23,6 +23,7 @@ import {
   DEFAULT_HOME_TILES,
   HOME_PANEL_IDS,
   PANEL_META,
+  listTasks,
   isProjectDisplayPanel,
   panelTitle,
   projectIdFromDisplayPanel,
@@ -196,13 +197,24 @@ export default function App() {
   const [windowMaximized, setWindowMaximized] = useState(false);
 
   useEffect(() => {
+    const applyChrome = (s?: {
+      maximized?: boolean;
+      insetTop?: number;
+      insetRight?: number;
+      insetBottom?: number;
+      insetLeft?: number;
+    }) => {
+      const maximized = Boolean(s?.maximized);
+      setWindowMaximized(maximized);
+      const root = document.documentElement;
+      root.style.setProperty('--max-inset-top', `${Number(s?.insetTop) || 0}px`);
+      root.style.setProperty('--max-inset-right', `${Number(s?.insetRight) || 0}px`);
+      root.style.setProperty('--max-inset-bottom', `${Number(s?.insetBottom) || 0}px`);
+      root.style.setProperty('--max-inset-left', `${Number(s?.insetLeft) || 0}px`);
+    };
     if (!window.butler?.getWindowState && !window.butler?.onWindowState) return;
-    void window.butler.getWindowState?.().then((s) => {
-      if (s && typeof s.maximized === 'boolean') setWindowMaximized(s.maximized);
-    });
-    return window.butler.onWindowState?.((s) => {
-      if (s && typeof s.maximized === 'boolean') setWindowMaximized(s.maximized);
-    });
+    void window.butler.getWindowState?.().then((s) => applyChrome(s));
+    return window.butler.onWindowState?.((s) => applyChrome(s));
   }, []);
 
   useEffect(() => {
@@ -247,7 +259,8 @@ export default function App() {
     const recent = store.recentConversations.slice(0, 2).map((c) => ({
       text: c.title || 'Recent chat',
     }));
-    const tasks = [...store.data.tasks]
+    const allTasks = listTasks(store.data);
+    const tasks = [...allTasks]
       .filter((t) => t.enabled)
       .sort((a, b) => a.runAt.localeCompare(b.runAt))
       .slice(0, 2)
@@ -262,7 +275,7 @@ export default function App() {
       .filter((w) => w.status === 'running' || w.status === 'pending')
       .slice(0, 2)
       .map((w) => ({ text: `${w.title} (${w.status})` }));
-    const upcoming = [...store.data.tasks]
+    const upcoming = [...allTasks]
       .filter((t) => t.enabled)
       .sort((a, b) => a.runAt.localeCompare(b.runAt))
       .slice(0, 2)
@@ -299,7 +312,7 @@ export default function App() {
         folders: `${store.data.folders.length}/20`,
         conversations: `${store.savedConversations.length}/20`,
         recent: `${store.recentConversations.length}/10`,
-        tasks: `${store.data.tasks.length}/10`,
+        tasks: `${listTasks(store.data).length}/10`,
         projects: `${store.data.projects.length}/10`,
         currentlyOpen: `${store.data.workItems.filter((w) => w.status === 'running').length}`,
         marketplace: '·',
@@ -310,7 +323,8 @@ export default function App() {
   );
 
   const tileStatus = useMemo(() => {
-    const dueSoon = store.data.tasks.some(
+    const allTasks = listTasks(store.data);
+    const dueSoon = allTasks.some(
       (t) => t.enabled && new Date(t.runAt).getTime() - Date.now() < 15 * 60 * 1000
     );
     const running = store.data.workItems.some((w) => w.status === 'running');
@@ -318,7 +332,7 @@ export default function App() {
       folders: null,
       conversations: null,
       recent: null,
-      tasks: dueSoon || store.data.tasks.some((t) => t.type === 'remind' && t.enabled)
+      tasks: dueSoon || allTasks.some((t) => t.type === 'remind' && t.enabled)
         ? ('warn' as const)
         : null,
       projects: store.data.activeProjectId ? ('ok' as const) : null,
@@ -346,8 +360,8 @@ export default function App() {
       className={`app${windowMaximized ? ' is-maximized' : ''}`}
       style={{
         gridTemplateRows: store.banner
-          ? 'minmax(48px, auto) auto 1fr var(--chat-h)'
-          : 'minmax(48px, auto) 1fr var(--chat-h)',
+          ? 'auto auto 1fr var(--chat-h)'
+          : 'auto 1fr var(--chat-h)',
       }}
     >
       <header className="titlebar">

@@ -187,6 +187,8 @@ export type AppData = {
   folders: FolderItem[];
   projects: Project[];
   tasks: ScheduledTask[];
+  /** Once set, empty tasks stay empty (do not re-seed after the user deletes them). */
+  sampleTasksApplied?: boolean;
   workItems: WorkItem[];
   displayItems: DisplayItem[];
   activeDisplayId: string | null;
@@ -318,3 +320,8 @@ export const DEFAULT_APP_DATA: AppData = {
   selectedFolderIdsForNewChat: [],
   chatAttachment: null,
 };
+
+/** Same array the Tasks tile count and Tasks panel body must use. */
+export function listTasks(data: Pick<AppData, 'tasks'> | null | undefined): ScheduledTask[] {
+  return Array.isArray(data?.tasks) ? data.tasks : [];
+}

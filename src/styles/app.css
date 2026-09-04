@@ -67,8 +67,9 @@ button {
 
 .app {
   display: grid;
-  grid-template-rows: minmax(48px, auto) auto 1fr var(--chat-h);
+  grid-template-rows: auto auto 1fr var(--chat-h);
   height: 100%;
+  box-sizing: border-box;
   background:
     radial-gradient(1200px 600px at 80% 0%, rgba(124, 156, 255, 0.08), transparent 60%),
     radial-gradient(800px 400px at 10% 100%, rgba(167, 139, 250, 0.06), transparent 50%),
@@ -90,11 +91,11 @@ button {
 
 /* Title bar */
 .titlebar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(min-content, 1fr);
   align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
+  column-gap: 12px;
+  row-gap: 8px;
   min-height: 48px;
   padding: 6px 12px 6px 16px;
   border-bottom: 1px solid var(--border);
@@ -104,8 +105,17 @@ button {
   overflow: visible;
 }
 
+.app.is-maximized {
+  padding: var(--max-inset-top, 0px) var(--max-inset-right, 0px)
+    var(--max-inset-bottom, 0px) var(--max-inset-left, 0px);
+}
+
+.app.is-maximized .brand .sub {
+  display: none;
+}
+
 .app.is-maximized .titlebar {
-  padding-right: 18px;
+  padding-right: 12px;
 }
 
 [data-theme='light'] .titlebar {
@@ -117,7 +127,6 @@ button {
   align-items: center;
   gap: 10px;
   min-width: 0;
-  flex: 1 1 auto;
   font-weight: 650;
   letter-spacing: 0.02em;
 }
@@ -145,13 +154,15 @@ button {
   align-items: center;
   flex-wrap: wrap;
   justify-content: flex-end;
-  flex: 0 0 auto;
+  justify-self: end;
+  max-width: 100%;
   gap: 10px;
 }
 
 .status-group {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-right: 8px;
 }
@@ -160,6 +171,7 @@ button {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-shrink: 0;
   min-height: 32px;
   padding: 4px 10px;
   border-radius: 999px;
@@ -167,6 +179,7 @@ button {
   background: var(--bg-tile);
   font-size: 0.78rem;
   color: var(--text-dim);
+  white-space: nowrap;
 }
 
 .dot {
@@ -187,9 +200,11 @@ button {
   background: var(--bg-tile);
   color: var(--text);
   border-radius: 8px;
+  flex-shrink: 0;
   min-height: 32px;
   padding: 8px 12px;
   line-height: 1;
+  white-space: nowrap;
 }
 
 .icon-btn:hover {
@@ -204,6 +219,7 @@ button {
 
 .win-btns {
   display: flex;
+  flex-shrink: 0;
   gap: 4px;
   margin-left: 6px;
 }
