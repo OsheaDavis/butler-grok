@@ -187,6 +187,8 @@ export type AppData = {
   folders: FolderItem[];
   projects: Project[];
   tasks: ScheduledTask[];
+  /** Once set, empty tasks stay empty (do not re-seed after the user deletes them). */
+  sampleTasksApplied?: boolean;
   workItems: WorkItem[];
   displayItems: DisplayItem[];
   activeDisplayId: string | null;
@@ -218,7 +220,7 @@ export const PANEL_META: Record<
     home: true,
   },
   tasks: { title: 'Tasks', short: 'Tasks', max: 10, subtitle: 'Reminders & work', home: true },
-  projects: { title: 'Projects', short: 'Projects', max: 10, subtitle: 'Long jobs', home: true },
+  projects: { title: 'Projects', short: 'Projects', max: 25, subtitle: 'Long jobs', home: true },
   currentlyOpen: {
     title: 'Currently Open',
     short: 'Open',
@@ -270,6 +272,14 @@ export const DEFAULT_HOME_TILES: HomeTileLayout[] = [
   { id: 'display', x: 284, y: 488 },
 ];
 
+/** Keep saved desk layouts, but restore any home tiles that were dropped. */
+export function mergeHomeTiles(saved?: HomeTileLayout[] | null): HomeTileLayout[] {
+  const base = saved && saved.length ? [...saved] : [...DEFAULT_HOME_TILES];
+  const have = new Set(base.map((t) => t.id));
+  const missing = DEFAULT_HOME_TILES.filter((t) => !have.has(t.id));
+  return missing.length ? [...base, ...missing] : base;
+}
+
 export type FloatLayout = { x: number; y: number; w: number; h: number };
 
 export const DEFAULT_CHAT_HEIGHT = 220;
@@ -310,3 +320,8 @@ export const DEFAULT_APP_DATA: AppData = {
   selectedFolderIdsForNewChat: [],
   chatAttachment: null,
 };
+
+/** Same array the Tasks tile count and Tasks panel body must use. */
+export function listTasks(data: Pick<AppData, 'tasks'> | null | undefined): ScheduledTask[] {
+  return Array.isArray(data?.tasks) ? data.tasks : [];
+}

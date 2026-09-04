@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   DEFAULT_APP_DATA,
   DEFAULT_SETTINGS,
+  listTasks,
+  mergeHomeTiles,
   type AppData,
   type ChatAttachment,
   type ChatMessage,
@@ -28,6 +30,12 @@ import {
 } from '../lib/xaiChat';
 import { speakText } from '../lib/speech';
 import { speakWithLeo, stopLeoAudio } from '../lib/leoTts';
+import { createLeoSpeakQueue } from '../lib/leoSpeakQueue';
+import {
+  consumeSpeechPieces,
+  flushSpeechRemainder,
+  prepareStreamingSpeech,
+} from '../lib/speechSentences';
 import { ensureSampleData } from '../lib/sampleData';
 import {
   extractMediaFromText,
@@ -41,6 +49,7 @@ import {
   detectImagePrompt,
   generateXaiImage,
 } from '../lib/xaiImage';
+import { API_KEY_MASK, isApiKeyMask } from '../lib/apiKeyUi';
 
 const SETTINGS_FILE = 'settings.json';
 const DATA_FILE = 'appdata.json';
@@ -77,6 +86,28 @@ export function useAppStore() {
   const [retainedThinking, setRetainedThinking] = useState('');
   const streamAbortRef = useRef<AbortController | null>(null);
   const voiceCancelledRef = useRef(false);
+  const speechTakenRef = useRef(0);
+  const speechSpokenCharsRef = useRef(0);
+  const speechActiveRef = useRef(false);
+  const leoQueueHooksRef = useRef<{
+    isCancelled: () => boolean;
+    onFirstAudioStart: () => void;
+    onQueueIdle: () => void;
+    onError: (msg: string) => void;
+  }>({
+    isCancelled: () => false,
+    onFirstAudioStart: () => {},
+    onQueueIdle: () => {},
+    onError: (_msg: string) => {},
+  });
+  const leoQueueRef = useRef(
+    createLeoSpeakQueue({
+      isCancelled: () => leoQueueHooksRef.current.isCancelled(),
+      onFirstAudioStart: () => leoQueueHooksRef.current.onFirstAudioStart(),
+      onQueueIdle: () => leoQueueHooksRef.current.onQueueIdle(),
+      onError: (msg) => leoQueueHooksRef.current.onError(msg),
+    })
+  );
   /** True while this window owns the active cloud stream (for multi-window sync) */
   const streamOwnerRef = useRef(false);
   /** Skip one persist after load/remote apply so panel windows don't wipe new display items */
@@ -95,6 +126,9 @@ export function useAppStore() {
   const [chatBusy, setChatBusy] = useState(false);
   const [apiOk, setApiOk] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
+  const [hasApiKey, setHasApiKey] = useState(false);
+  const hasApiKeyRef = useRef(false);
+  hasApiKeyRef.current = hasApiKey;
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settingsRef = useRef(settings);
@@ -106,6 +140,23 @@ export function useAppStore() {
     setToast(msg);
     setTimeout(() => setToast(null), 4000);
   }, []);
+
+  leoQueueHooksRef.current = {
+    isCancelled: () => voiceCancelledRef.current,
+    onFirstAudioStart: () => {
+      if (voiceCancelledRef.current) return;
+      setSpeaking(true);
+      setLeoReady(true);
+    },
+    onQueueIdle: () => setSpeaking(false),
+    onError: (msg) => {
+      setLeoReady(false);
+      if (leoQueueRef.current.heardAudio() && msg) {
+        showToast(`Leo failed — (${msg.slice(0, 90)})`);
+      }
+      speechActiveRef.current = false;
+    },
+  };
 
   /** Call on typing / send — may fire welcome after 15 min quiet */
   const noteUserActivity = useCallback(() => {
@@ -122,7 +173,7 @@ export function useAppStore() {
     const s = settingsRef.current;
     const d = dataRef.current;
     if (window.butler) {
-      await window.butler.save(SETTINGS_FILE, s);
+      await window.butler.save(SETTINGS_FILE, { ...s, apiKey: '' });
       await window.butler.save(DATA_FILE, d);
     } else {
       browserFallbackSave(SETTINGS_FILE, s);
@@ -150,10 +201,19 @@ export function useAppStore() {
         if (!cancelled) setAppInfo({ version: info.version, dataDir: info.dataDir });
         settingsRes = await window.butler.load(SETTINGS_FILE, DEFAULT_SETTINGS);
         dataRes = await window.butler.load(DATA_FILE, DEFAULT_APP_DATA);
+        const stored = await window.butler.hasKey?.();
+        if (!cancelled && stored?.hasKey) {
+          setHasApiKey(true);
+          hasApiKeyRef.current = true;
+        }
       } else {
         settingsRes = browserFallbackLoad(SETTINGS_FILE, DEFAULT_SETTINGS);
         dataRes = browserFallbackLoad(DATA_FILE, DEFAULT_APP_DATA);
         setAppInfo({ version: '0.1.0', dataDir: '(browser)' });
+        if (settingsRes.data.apiKey?.trim()) {
+          setHasApiKey(true);
+          hasApiKeyRef.current = true;
+        }
       }
 
       if (cancelled) return;
@@ -162,31 +222,37 @@ export function useAppStore() {
       const needsLayoutReset =
         (settingsRes.data.layoutVersion || 0) < LAYOUT_VERSION ||
         !settingsRes.data.homeTiles?.length;
+      const storedHasKey = Boolean(hasApiKeyRef.current);
       const mergedSettings: Settings = {
         ...DEFAULT_SETTINGS,
         ...settingsRes.data,
+        apiKey: storedHasKey ? API_KEY_MASK : '',
         layoutVersion: LAYOUT_VERSION,
         chatHeight:
           settingsRes.data.chatHeight ||
           DEFAULT_SETTINGS.chatHeight ||
           220,
-        homeTiles: needsLayoutReset
-          ? DEFAULT_SETTINGS.homeTiles
-          : settingsRes.data.homeTiles,
+        homeTiles: mergeHomeTiles(
+          needsLayoutReset ? DEFAULT_SETTINGS.homeTiles : settingsRes.data.homeTiles
+        ),
       };
       let mergedData: AppData = normalizeAppDataDisplayAndProjects({
         ...DEFAULT_APP_DATA,
         ...dataRes.data,
       }) as AppData;
       // Testing phase: fill empty sections with sample folders/project/tasks
+      const beforeSample = mergedData;
       mergedData = ensureSampleData(mergedData, homeDir);
       mergedData = normalizeAppDataDisplayAndProjects(mergedData) as AppData;
+      const addedSample = beforeSample !== mergedData;
 
+      settingsRef.current = mergedSettings;
+      dataRef.current = mergedData;
       setSettings(mergedSettings);
       setData(mergedData);
       setFirstRunOpen(!mergedSettings.firstRunDone);
-      setLeoReady(Boolean(mergedSettings.apiKey) && mergedSettings.connectionMode !== 'A');
-      setApiOk(Boolean(mergedSettings.apiKey) && mergedSettings.connectionMode !== 'A');
+      setLeoReady(storedHasKey && mergedSettings.connectionMode !== 'A');
+      setApiOk(storedHasKey && mergedSettings.connectionMode !== 'A');
       if (window.butler) {
         void window.butler.setTrayMinimize(mergedSettings.minimizeToTray);
         void window.butler.setLoginItem(mergedSettings.startWithWindows);
@@ -196,6 +262,7 @@ export function useAppStore() {
       }
       skipNextPersistRef.current = true;
       setReady(true);
+      if (addedSample) void persist();
     })();
     return () => {
       cancelled = true;
@@ -218,6 +285,22 @@ export function useAppStore() {
     });
   }, []);
 
+  useEffect(() => {
+    if (!window.butler?.onSecretsChanged) return;
+    return window.butler.onSecretsChanged((payload) => {
+      const next = Boolean(payload?.hasKey);
+      setHasApiKey(next);
+      hasApiKeyRef.current = next;
+      setSettings((s) => {
+        if (next) {
+          if (s.apiKey && !isApiKeyMask(s.apiKey)) return s;
+          return { ...s, apiKey: API_KEY_MASK };
+        }
+        return isApiKeyMask(s.apiKey) ? { ...s, apiKey: '' } : s;
+      });
+    });
+  }, []);
+
   // Reload app data when another window saves (float chat ↔ main)
   useEffect(() => {
     if (!window.butler?.onStorageChanged) return;
@@ -229,7 +312,16 @@ export function useAppStore() {
           const res = await window.butler.load(DATA_FILE, DEFAULT_APP_DATA);
           // Don't let this reload immediately re-save and wipe newer local edits
           skipNextPersistRef.current = true;
-          setData({ ...DEFAULT_APP_DATA, ...res.data });
+          setData(
+            normalizeAppDataDisplayAndProjects({
+              ...DEFAULT_APP_DATA,
+              ...res.data,
+              tasks: listTasks(res.data),
+              sampleTasksApplied: Boolean(
+                (res.data as AppData | undefined)?.sampleTasksApplied
+              ),
+            }) as AppData
+          );
         } catch {
           /* ignore */
         }
@@ -285,10 +377,10 @@ export function useAppStore() {
   }, [refreshGrokStatus]);
 
   useEffect(() => {
-    const cloud = Boolean(settings.apiKey) && settings.connectionMode !== 'A';
+    const cloud = hasApiKey && settings.connectionMode !== 'A';
     setLeoReady(cloud);
     setApiOk(cloud);
-  }, [settings.apiKey, settings.connectionMode]);
+  }, [hasApiKey, settings.connectionMode]);
 
   // Connection banner (simple, not noisy)
   useEffect(() => {
@@ -296,18 +388,41 @@ export function useAppStore() {
     const mode = settings.connectionMode;
     if (mode === 'A' && !grokConnected) {
       setBanner('Grok Build not detected. Click Start Grok, or switch to Mode B/C in Settings.');
-    } else if ((mode === 'B' || mode === 'C') && !settings.apiKey && !settings.demoMode) {
+    } else if ((mode === 'B' || mode === 'C') && !hasApiKey && !settings.demoMode) {
       setBanner('Cloud mode needs an xAI API key in Settings ⚙');
     } else if (mode === 'C' && !grokConnected) {
       setBanner('Mode C: API ready for chat; Grok Build offline for PC work tasks.');
     } else {
       setBanner(null);
     }
-  }, [ready, settings.connectionMode, settings.apiKey, settings.demoMode, grokConnected]);
+  }, [ready, settings.connectionMode, hasApiKey, settings.demoMode, grokConnected]);
 
   const updateSettings = useCallback((patch: Partial<Settings>) => {
     setSettings((s) => ({ ...s, ...patch }));
-  }, []);
+    if (!Object.prototype.hasOwnProperty.call(patch, 'apiKey')) return;
+    const v = String(patch.apiKey || '').trim();
+    if (isApiKeyMask(v)) return;
+    if (!window.butler?.setKey) {
+      setHasApiKey(Boolean(v));
+      hasApiKeyRef.current = Boolean(v);
+      return;
+    }
+    if (!v) {
+      setHasApiKey(false);
+      hasApiKeyRef.current = false;
+      void window.butler.clearKey?.();
+      return;
+    }
+    setHasApiKey(true);
+    hasApiKeyRef.current = true;
+    void window.butler.setKey(v).then((r) => {
+      if (!r?.ok) {
+        setHasApiKey(false);
+        hasApiKeyRef.current = false;
+        showToast(r?.error || 'Could not save API key.');
+      }
+    });
+  }, [showToast]);
 
   const updateData = useCallback((patch: Partial<AppData> | ((d: AppData) => AppData)) => {
     setData((d) => (typeof patch === 'function' ? patch(d) : { ...d, ...patch }));
@@ -318,39 +433,41 @@ export function useAppStore() {
     setPointingPanel(id);
     window.setTimeout(() => setPointingPanel(null), 1700);
 
-    // Prefer real OS windows so panels can move outside the main app frame
-    if (window.butler?.openPanelWindow) {
-      void window.butler.openPanelWindow(id);
-      setOpenFloats((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    const openInApp = () => {
+      setOpenFloats((prev) => {
+        const already = prev.includes(id);
+        setSettings((s) => {
+          if (s.floatLayouts[id]) return s;
+          const offset = (already ? prev.indexOf(id) : prev.length) * 28;
+          return {
+            ...s,
+            floatLayouts: {
+              ...s.floatLayouts,
+              [id]: { x: 36 + offset, y: 36 + offset, w: 460, h: 380 },
+            },
+          };
+        });
+        return already ? prev : [...prev, id];
+      });
       setZCounter((z) => {
         const next = z + 1;
         setFloatZ((fz) => ({ ...fz, [id]: next }));
         return next;
       });
+    };
+
+    // Prefer real OS windows so panels can move outside the main app frame
+    if (window.butler?.openPanelWindow) {
+      void window.butler
+        .openPanelWindow(id)
+        .then((r) => {
+          if (!r || r.ok === false) openInApp();
+        })
+        .catch(() => openInApp());
       return;
     }
 
-    // Browser / fallback: in-app floating panel
-    setOpenFloats((prev) => {
-      const already = prev.includes(id);
-      setSettings((s) => {
-        if (s.floatLayouts[id]) return s;
-        const offset = (already ? prev.indexOf(id) : prev.length) * 28;
-        return {
-          ...s,
-          floatLayouts: {
-            ...s.floatLayouts,
-            [id]: { x: 36 + offset, y: 36 + offset, w: 460, h: 380 },
-          },
-        };
-      });
-      return already ? prev : [...prev, id];
-    });
-    setZCounter((z) => {
-      const next = z + 1;
-      setFloatZ((fz) => ({ ...fz, [id]: next }));
-      return next;
-    });
+    openInApp();
   }, []);
 
   const closePanel = useCallback((id: PanelId) => {
@@ -519,8 +636,66 @@ export function useAppStore() {
     []
   );
 
+  const resetStreamingSpeech = useCallback(() => {
+    speechTakenRef.current = 0;
+    speechSpokenCharsRef.current = 0;
+    speechActiveRef.current = false;
+    leoQueueRef.current.reset();
+  }, []);
+
+  const beginStreamingSpeech = useCallback(() => {
+    const s = settingsRef.current;
+    const canLeo =
+      hasApiKeyRef.current &&
+      (s.connectionMode === 'B' || s.connectionMode === 'C') &&
+      s.butlerVoiceOn &&
+      !s.muteSounds;
+    resetStreamingSpeech();
+    voiceCancelledRef.current = false;
+    if (!canLeo) return false;
+    stopLeoAudio();
+    speechActiveRef.current = true;
+    return true;
+  }, [resetStreamingSpeech]);
+
+  const pushStreamingSpeech = useCallback((full: string) => {
+    if (!speechActiveRef.current || voiceCancelledRef.current) return;
+    const prepared = prepareStreamingSpeech(full);
+    const next = consumeSpeechPieces(
+      prepared,
+      speechTakenRef.current,
+      speechSpokenCharsRef.current
+    );
+    speechTakenRef.current = next.nextTaken;
+    speechSpokenCharsRef.current = next.nextSpokenChars;
+    for (const piece of next.pieces) {
+      leoQueueRef.current.enqueue(piece);
+    }
+  }, []);
+
+  const finishStreamingSpeech = useCallback((full: string) => {
+    if (!speechActiveRef.current) return false;
+    if (voiceCancelledRef.current) {
+      resetStreamingSpeech();
+      return true;
+    }
+    const prepared = prepareStreamingSpeech(full);
+    const tail = flushSpeechRemainder(
+      prepared,
+      speechTakenRef.current,
+      speechSpokenCharsRef.current
+    );
+    if (tail) leoQueueRef.current.enqueue(tail);
+    const used = leoQueueRef.current.wasUsed() || Boolean(tail);
+    leoQueueRef.current.finish();
+    speechActiveRef.current = false;
+    return used;
+  }, [resetStreamingSpeech]);
+
   const stopVoice = useCallback(() => {
     voiceCancelledRef.current = true;
+    speechActiveRef.current = false;
+    leoQueueRef.current.reset();
     stopLeoAudio();
     if ('speechSynthesis' in window) {
       try {
@@ -549,10 +724,9 @@ export function useAppStore() {
     }
 
     const canLeo =
-      Boolean(s.apiKey.trim()) && (s.connectionMode === 'B' || s.connectionMode === 'C');
+      hasApiKeyRef.current && (s.connectionMode === 'B' || s.connectionMode === 'C');
 
-    // Start network TTS ASAP — most of the “delay” is API download, not the player
-    // (mouth/VU still wait for real LEO_PLAY_START)
+    // Stream TTS in main as bytes arrive; mouth/VU still wait for real LEO_PLAY_START
 
     const markStart = () => {
       if (voiceCancelledRef.current) return;
@@ -596,7 +770,7 @@ export function useAppStore() {
           /* ignore */
         }
       }
-      void speakWithLeo(s.apiKey, spoken, {
+      void speakWithLeo(undefined, spoken, {
         onStart: markStart,
         onEnd: markEnd,
         onError: (msg) => {
@@ -645,7 +819,7 @@ export function useAppStore() {
         const existing = new Set(prev.map((p) => p.src.slice(0, 200)));
         const fresh = items.filter((i) => !existing.has(i.src.slice(0, 200)));
         if (!fresh.length) return d;
-        const displayItems = [...fresh, ...prev].slice(0, 80);
+        const displayItems = [...fresh, ...prev].slice(0, LIMITS.displayItems);
         return {
           ...d,
           displayItems,
@@ -717,13 +891,13 @@ export function useAppStore() {
       updatedAt: now,
       saved: false,
     };
-    setData((d) => ({
-      ...d,
-      conversations: [conv, ...d.conversations].slice(0, 40),
+    const next: AppData = {
+      ...dataRef.current,
+      conversations: [conv, ...dataRef.current.conversations].slice(0, 40),
       activeConversationId: conv.id,
       draft: '',
       projects: projectId
-        ? d.projects.map((p) =>
+        ? dataRef.current.projects.map((p) =>
             p.id === projectId && !p.conversationIds.includes(conv.id)
               ? {
                   ...p,
@@ -732,14 +906,17 @@ export function useAppStore() {
                 }
               : p
           )
-        : d.projects,
-    }));
+        : dataRef.current.projects,
+    };
+    dataRef.current = next;
+    setData(next);
     showToast(
       projectId
         ? 'New chat in this project — you’re talking inside the project.'
         : 'Started a new conversation.'
     );
-  }, [showToast]);
+    void persist();
+  }, [persist, showToast]);
 
   /**
    * Enter a project workspace: set active project, resume or start its chat,
@@ -776,14 +953,14 @@ export function useAppStore() {
           saved: false,
         };
         convId = conv.id;
-        setData((d) => ({
-          ...d,
+        const next: AppData = {
+          ...dataRef.current,
           activeProjectId: projectId,
-          activeConversationId: convId!,
+          activeConversationId: convId,
           draft: '',
           selectedFolderIdsForNewChat: [...(project.folderIds || [])],
-          conversations: [conv, ...d.conversations].slice(0, 40),
-          projects: d.projects.map((p) =>
+          conversations: [conv, ...dataRef.current.conversations].slice(0, 40),
+          projects: dataRef.current.projects.map((p) =>
             p.id === projectId
               ? {
                   ...p,
@@ -795,20 +972,22 @@ export function useAppStore() {
                 }
               : p
           ),
-        }));
+        };
+        dataRef.current = next;
+        setData(next);
         showToast(`Chat open for “${project.name}” — pick up where you left off.`);
       } else {
-        setData((d) => ({
-          ...d,
+        const next: AppData = {
+          ...dataRef.current,
           activeProjectId: projectId,
-          activeConversationId: convId!,
+          activeConversationId: convId,
           selectedFolderIdsForNewChat: [
             ...new Set([
               ...(project.folderIds || []),
-              ...(d.conversations.find((c) => c.id === convId)?.folderIds || []),
+              ...(dataRef.current.conversations.find((c) => c.id === convId)?.folderIds || []),
             ]),
           ],
-          projects: d.projects.map((p) =>
+          projects: dataRef.current.projects.map((p) =>
             p.id === projectId && !p.conversationIds.includes(convId!)
               ? {
                   ...p,
@@ -817,14 +996,16 @@ export function useAppStore() {
                 }
               : p
           ),
-        }));
+        };
+        dataRef.current = next;
+        setData(next);
         showToast(`Continuing chat in “${project.name}”.`);
       }
 
-      // Float chat beside project work (and keep Projects open if already open)
-      openPanel('chat');
+      // Persist first so a newly opened chat window loads this conversation.
+      void persist().then(() => openPanel('chat'));
     },
-    [openPanel, showToast]
+    [openPanel, persist, showToast]
   );
 
   const sendChat = useCallback(
@@ -1025,7 +1206,7 @@ export function useAppStore() {
         const canCloud =
           !s.demoMode &&
           (s.connectionMode === 'B' || s.connectionMode === 'C') &&
-          Boolean(s.apiKey.trim());
+          hasApiKeyRef.current;
         setLiveThinking(
           attachment
             ? 'Recreating from your selected Display image…'
@@ -1044,7 +1225,7 @@ export function useAppStore() {
         const userVisible = attachment
           ? `${trimmed}\n\n_Using attached Display ${attachment.kind}: **${attachment.title}**_\n\n![Attached reference](${attachment.displaySrc || attachment.src})`
           : trimmed;
-        const gen = await generateXaiImage(s.apiKey, imagePrompt);
+        const gen = await generateXaiImage(undefined, imagePrompt);
         if (gen.ok) {
           const reply = attachment
             ? `Here’s a new version based on **your selected image** (“${attachment.title}”), with your changes:\n\n![Generated](${gen.url})\n\n_Model: ${gen.model}_\n\n_Reference was attached from Display so we know which one you meant._`
@@ -1096,10 +1277,11 @@ export function useAppStore() {
       const canCloud =
         !s.demoMode &&
         (s.connectionMode === 'B' || s.connectionMode === 'C') &&
-        Boolean(s.apiKey.trim());
+        hasApiKeyRef.current;
 
       let reply: string;
       let thinking = '';
+      let cloudStreamOk = false;
 
       if (canCloud) {
         const folderPaths = dataRef.current.folders
@@ -1193,8 +1375,8 @@ export function useAppStore() {
           return { ...prev, conversations: convs, activeConversationId: activeId, draft: '' };
         });
 
+        const streamingSpeech = beginStreamingSpeech();
         const result = await xaiChatCompletionStream({
-          apiKey: s.apiKey,
           messages: [
             { role: 'system', content: system },
             ...history.filter((m) => m.role !== 'system'),
@@ -1208,12 +1390,14 @@ export function useAppStore() {
           onContent: (full) => {
             setLiveReply(full);
             publishLive({ busy: true, reply: full });
+            if (streamingSpeech) pushStreamingSpeech(full);
           },
         });
 
         if (result.ok) {
           reply = result.content;
           thinking = result.thinking;
+          cloudStreamOk = true;
           setApiOk(true);
           setLeoReady(true);
         } else {
@@ -1252,8 +1436,13 @@ export function useAppStore() {
         ingestMediaFromReply(reply);
       }
 
-      // Speak first (TTS download starts immediately), then finish UI bookkeeping
-      speakReply(reply);
+      // Leo sentences start from onContent; only speak the full reply when we did not stream.
+      if (cloudStreamOk && speechActiveRef.current) {
+        finishStreamingSpeech(reply);
+      } else if (!leoQueueRef.current.heardAudio() && !voiceCancelledRef.current) {
+        resetStreamingSpeech();
+        speakReply(reply);
+      }
       // Clear Display→chat attachment after a normal reply (image-edit path clears itself)
       setData((d) => (d.chatAttachment ? { ...d, chatAttachment: null } : d));
 
@@ -1272,14 +1461,18 @@ export function useAppStore() {
     },
     [
       appendMessages,
+      beginStreamingSpeech,
       chatBusy,
       ensureActiveConversation,
+      finishStreamingSpeech,
       ingestMediaFromReply,
       localButlerReply,
       noteUserActivity,
       openGrokTerminal,
       openPanel,
       publishLive,
+      pushStreamingSpeech,
+      resetStreamingSpeech,
       speakReply,
       startNewConversation,
     ]
@@ -1290,10 +1483,12 @@ export function useAppStore() {
       showToast('No Butler reply to play yet.');
       return;
     }
+    voiceCancelledRef.current = false;
+    resetStreamingSpeech();
     stopLeoAudio();
     speakReply(lastAssistantText);
     showToast('Replaying last Butler reply…');
-  }, [lastAssistantText, speakReply, showToast]);
+  }, [lastAssistantText, resetStreamingSpeech, speakReply, showToast]);
 
   const addDisplayFromUrl = useCallback(
     (url: string) => {
@@ -1324,7 +1519,7 @@ export function useAppStore() {
             vote: i.vote || ('pending' as const),
           })),
           ...(d.displayItems || []),
-        ].slice(0, 80),
+        ].slice(0, LIMITS.displayItems),
         activeDisplayId: items[0].id,
       }));
       const pid = dataRef.current.activeProjectId;
@@ -1381,7 +1576,7 @@ export function useAppStore() {
             id: uid('disp'),
             kind,
             src,
-            displaySrc: src.startsWith('http') ? undefined : src.startsWith('file:') ? src : `file:///${src.replace(/\\/g, '/')}`,
+            displaySrc: src.startsWith('data:') ? src : undefined,
             title: name,
             createdAt: now,
             source: 'manual' as const,
@@ -1400,7 +1595,7 @@ export function useAppStore() {
             vote: 'pending' as const,
           })),
           ...(d.displayItems || []),
-        ].slice(0, 80),
+        ].slice(0, LIMITS.displayItems),
         activeDisplayId: items[0].id,
       }));
       const pid = dataRef.current.activeProjectId;
@@ -1445,8 +1640,8 @@ export function useAppStore() {
 
   const addProject = useCallback(
     (name: string) => {
-      if (dataRef.current.projects.length >= 10) {
-        showToast('Maximum 10 projects.');
+      if (dataRef.current.projects.length >= LIMITS.projects) {
+        showToast(`Maximum ${LIMITS.projects} projects.`);
         return;
       }
       const p: Project = {
@@ -1781,12 +1976,12 @@ export function useAppStore() {
 
   const addTask = useCallback(
     (task: Omit<ScheduledTask, 'id'>) => {
-      if (dataRef.current.tasks.length >= 10) {
+      if (listTasks(dataRef.current).length >= 10) {
         showToast('Maximum 10 tasks.');
         return;
       }
       const t: ScheduledTask = { ...task, id: uid('task') };
-      setData((d) => ({ ...d, tasks: [...d.tasks, t] }));
+      setData((d) => ({ ...d, tasks: [...listTasks(d), t] }));
     },
     [showToast]
   );
@@ -1794,12 +1989,12 @@ export function useAppStore() {
   const updateTask = useCallback((id: string, patch: Partial<ScheduledTask>) => {
     setData((d) => ({
       ...d,
-      tasks: d.tasks.map((t) => (t.id === id ? { ...t, ...patch } : t)),
+      tasks: listTasks(d).map((t) => (t.id === id ? { ...t, ...patch } : t)),
     }));
   }, []);
 
   const removeTask = useCallback((id: string) => {
-    setData((d) => ({ ...d, tasks: d.tasks.filter((t) => t.id !== id) }));
+    setData((d) => ({ ...d, tasks: listTasks(d).filter((t) => t.id !== id) }));
   }, []);
 
   // Task scheduler tick
@@ -1807,7 +2002,7 @@ export function useAppStore() {
     if (!ready) return;
     const tick = () => {
       const now = Date.now();
-      const tasks = dataRef.current.tasks;
+      const tasks = listTasks(dataRef.current);
       for (const t of tasks) {
         if (!t.enabled) continue;
         const runAt = new Date(t.runAt).getTime();
@@ -1817,7 +2012,7 @@ export function useAppStore() {
         // Fire
         setData((d) => ({
           ...d,
-          tasks: d.tasks.map((x) =>
+          tasks: listTasks(d).map((x) =>
             x.id === t.id
               ? {
                   ...x,
@@ -2028,6 +2223,7 @@ export function useAppStore() {
     appInfo,
     persist,
     apiOk,
+    hasApiKey,
     banner,
     setBanner,
     addDisplayFromUrl,

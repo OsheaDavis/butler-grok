@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 // useMemo used for panel titles
 import { useAppStore, type AppStore } from './hooks/useAppStore';
 import { HomeTile, type TileLine } from './components/HomeTile';
@@ -23,12 +23,14 @@ import {
   DEFAULT_HOME_TILES,
   HOME_PANEL_IDS,
   PANEL_META,
+  listTasks,
   isProjectDisplayPanel,
   panelTitle,
   projectIdFromDisplayPanel,
   type PanelId,
   type StaticPanelId,
 } from './lib/types';
+import { LIMITS } from './lib/limits';
 
 const DEFAULT_FLOAT = { x: 40, y: 40, w: 440, h: 360 };
 
@@ -90,11 +92,11 @@ function ChatPanelBody({ store }: { store: AppStore }) {
       chatBusy={store.chatBusy}
       micOn={store.settings.micOn}
       onToggleMic={() => store.updateSettings({ micOn: !store.settings.micOn })}
-      apiKey={store.settings.apiKey}
+      hasApiKey={store.hasApiKey}
       useCloudStt={
         !store.settings.demoMode &&
         (store.settings.connectionMode === 'B' || store.settings.connectionMode === 'C') &&
-        Boolean(store.settings.apiKey.trim())
+        store.hasApiKey
       }
       onToast={store.showToast}
       liveThinking={store.liveThinking}
@@ -192,8 +194,29 @@ function PanelWindowApp({ panelId, store }: { panelId: PanelId; store: AppStore 
 export default function App() {
   const store = useAppStore();
   const panelMode = getPanelIdFromUrl();
-  const useOsWindows = Boolean(window.butler?.openPanelWindow);
   const chatH = store.settings.chatHeight || DEFAULT_CHAT_HEIGHT;
+  const [windowMaximized, setWindowMaximized] = useState(false);
+
+  useEffect(() => {
+    const applyChrome = (s?: {
+      maximized?: boolean;
+      insetTop?: number;
+      insetRight?: number;
+      insetBottom?: number;
+      insetLeft?: number;
+    }) => {
+      const maximized = Boolean(s?.maximized);
+      setWindowMaximized(maximized);
+      const root = document.documentElement;
+      root.style.setProperty('--max-inset-top', `${Number(s?.insetTop) || 0}px`);
+      root.style.setProperty('--max-inset-right', `${Number(s?.insetRight) || 0}px`);
+      root.style.setProperty('--max-inset-bottom', `${Number(s?.insetBottom) || 0}px`);
+      root.style.setProperty('--max-inset-left', `${Number(s?.insetLeft) || 0}px`);
+    };
+    if (!window.butler?.getWindowState && !window.butler?.onWindowState) return;
+    void window.butler.getWindowState?.().then((s) => applyChrome(s));
+    return window.butler.onWindowState?.((s) => applyChrome(s));
+  }, []);
 
   useEffect(() => {
     document.documentElement.dataset.theme = store.settings.theme;
@@ -212,7 +235,7 @@ export default function App() {
           window.close();
           return;
         }
-        if (!useOsWindows && store.openFloats.length) {
+        if (store.openFloats.length) {
           const top = [...store.openFloats].sort(
             (a, b) => (store.floatZ[b] || 0) - (store.floatZ[a] || 0)
           )[0];
@@ -222,7 +245,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [store, panelMode, useOsWindows]);
+  }, [store, panelMode]);
 
   const tiles = (store.settings.homeTiles?.length
     ? store.settings.homeTiles
@@ -237,7 +260,8 @@ export default function App() {
     const recent = store.recentConversations.slice(0, 2).map((c) => ({
       text: c.title || 'Recent chat',
     }));
-    const tasks = [...store.data.tasks]
+    const allTasks = listTasks(store.data);
+    const tasks = [...allTasks]
       .filter((t) => t.enabled)
       .sort((a, b) => a.runAt.localeCompare(b.runAt))
       .slice(0, 2)
@@ -252,7 +276,7 @@ export default function App() {
       .filter((w) => w.status === 'running' || w.status === 'pending')
       .slice(0, 2)
       .map((w) => ({ text: `${w.title} (${w.status})` }));
-    const upcoming = [...store.data.tasks]
+    const upcoming = [...allTasks]
       .filter((t) => t.enabled)
       .sort((a, b) => a.runAt.localeCompare(b.runAt))
       .slice(0, 2)
@@ -289,8 +313,8 @@ export default function App() {
         folders: `${store.data.folders.length}/20`,
         conversations: `${store.savedConversations.length}/20`,
         recent: `${store.recentConversations.length}/10`,
-        tasks: `${store.data.tasks.length}/10`,
-        projects: `${store.data.projects.length}/10`,
+        tasks: `${listTasks(store.data).length}/10`,
+        projects: `${store.data.projects.length}/${LIMITS.projects}`,
         currentlyOpen: `${store.data.workItems.filter((w) => w.status === 'running').length}`,
         marketplace: '·',
         display: `${(store.data.displayItems || []).filter((i) => !i.projectId).length}`,
@@ -300,7 +324,8 @@ export default function App() {
   );
 
   const tileStatus = useMemo(() => {
-    const dueSoon = store.data.tasks.some(
+    const allTasks = listTasks(store.data);
+    const dueSoon = allTasks.some(
       (t) => t.enabled && new Date(t.runAt).getTime() - Date.now() < 15 * 60 * 1000
     );
     const running = store.data.workItems.some((w) => w.status === 'running');
@@ -308,7 +333,7 @@ export default function App() {
       folders: null,
       conversations: null,
       recent: null,
-      tasks: dueSoon || store.data.tasks.some((t) => t.type === 'remind' && t.enabled)
+      tasks: dueSoon || allTasks.some((t) => t.type === 'remind' && t.enabled)
         ? ('warn' as const)
         : null,
       projects: store.data.activeProjectId ? ('ok' as const) : null,
@@ -333,11 +358,11 @@ export default function App() {
 
   return (
     <div
-      className="app"
+      className={`app${windowMaximized ? ' is-maximized' : ''}`}
       style={{
         gridTemplateRows: store.banner
-          ? '48px auto 1fr var(--chat-h)'
-          : '48px 1fr var(--chat-h)',
+          ? 'auto auto 1fr var(--chat-h)'
+          : 'auto 1fr var(--chat-h)',
       }}
     >
       <header className="titlebar">
@@ -462,7 +487,7 @@ export default function App() {
             }}
           />
 
-          {!useOsWindows ? (
+          {store.openFloats.length ? (
             <div className="float-layer">
               {store.openFloats.map((id) => {
                 const layout = store.settings.floatLayouts[id] || DEFAULT_FLOAT;
@@ -541,11 +566,11 @@ export default function App() {
         chatBusy={store.chatBusy}
         micOn={store.settings.micOn}
         onToggleMic={() => store.updateSettings({ micOn: !store.settings.micOn })}
-        apiKey={store.settings.apiKey}
+        hasApiKey={store.hasApiKey}
         useCloudStt={
           !store.settings.demoMode &&
           (store.settings.connectionMode === 'B' || store.settings.connectionMode === 'C') &&
-          Boolean(store.settings.apiKey.trim())
+          store.hasApiKey
         }
         onToast={store.showToast}
         chatHeight={chatH}

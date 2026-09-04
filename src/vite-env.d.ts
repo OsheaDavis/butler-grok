@@ -102,8 +102,30 @@ export interface ButlerAPI {
   mediaOpenExternal: (url: string) => Promise<{ ok: boolean; error?: string }>;
   notify: (payload: { title?: string; body?: string }) => Promise<{ ok: boolean }>;
   diagnostics: () => Promise<string>;
+  hasKey: () => Promise<{ hasKey: boolean }>;
+  setKey: (key: string) => Promise<{ ok: boolean; error?: string }>;
+  clearKey: () => Promise<{ ok: boolean }>;
+  testKey: () => Promise<{ ok: boolean; message: string }>;
+  onSecretsChanged: (cb: (payload: { hasKey: boolean }) => void) => () => void;
+  xaiChatStream: (opts: {
+    messages: { role: 'system' | 'user' | 'assistant'; content: string }[];
+    model?: string;
+    onReasoning?: (full: string, delta: string) => void;
+    onContent?: (full: string, delta: string) => void;
+    signal?: AbortSignal;
+  }) => Promise<
+    | { ok: true; content: string; thinking: string; model: string }
+    | { ok: false; error: string }
+  >;
+  generateImage: (
+    prompt: string
+  ) => Promise<{ ok: true; url: string; model: string } | { ok: false; error: string }>;
+  transcribe: (payload: {
+    mime?: string;
+    filename?: string;
+    data: ArrayBuffer;
+  }) => Promise<{ ok: true; text: string } | { ok: false; error: string }>;
   leoSpeak: (
-    apiKey: string,
     text: string
   ) => Promise<{ ok: true; cancelled?: boolean } | { ok: false; error: string }>;
   leoStop: () => Promise<{ ok: boolean; cancelled?: boolean }>;
@@ -126,6 +148,22 @@ export interface ButlerAPI {
     }) => void
   ) => () => void;
   onStorageChanged: (cb: (payload: { fileName: string }) => void) => () => void;
+  onWindowState?: (
+    cb: (state: {
+      maximized: boolean;
+      insetTop?: number;
+      insetRight?: number;
+      insetBottom?: number;
+      insetLeft?: number;
+    }) => void
+  ) => () => void;
+  getWindowState?: () => Promise<{
+    maximized: boolean;
+    insetTop?: number;
+    insetRight?: number;
+    insetBottom?: number;
+    insetLeft?: number;
+  }>;
 }
 
 declare global {

@@ -12,10 +12,13 @@ Windows **Electron + React + Vite** app: a butler-themed desk for Grok Build and
 
 ## What’s working (high level)
 
-- Home desk, floating/OS panels, docked chat  
+- Home desk, floating/OS panels, docked chat (Market / New project chat / compose send wired)
+- Maximized Windows header insets so Update Grok / Leo / API / gear stay on-screen
+- Recent/search strings use UTF-8 (no “Searchâ€¦” junk)
+- Tasks tile count and Tasks panel list share the same persisted task array  
 - Modes A / B / C, Settings, first-run wizard  
 - Slash commands (`/imagine`, `/project`, `/like`, `/review`, `/save`, …)  
-- Speak: Enter stops recording, Enter again sends  
+- Speak: Enter stops recording, Enter again sends; Leo TTS streams into Windows MediaPlayer so voice can start as audio arrives; long cloud replies start Leo on sentence boundaries while the answer is still streaming (mouth/VU still wait for real playback start)  
 - Projects: continue/new chat, chat list, Save as project from general chat  
 - Per-project Display (`projdisp:<id>`) + General Display  
 - Library folders, votes, Bring to chat / drag-to-chat for image recreate  
@@ -35,7 +38,8 @@ Windows **Electron + React + Vite** app: a butler-themed desk for Grok Build and
 
 ## Architecture reminders
 
-- Renderer must not hold secrets in git; keys in Settings → local JSON under Data/  
+- Renderer must not hold secrets in git; xAI keys live in Electron `safeStorage` (not `Data/*.json`)  
+- Speak: main-process Leo streamer + `safeStorage` key via `getApiKey()`; renderer sends `{ text }` only  
 - Prefer small PRs; keep language simple in UI strings  
 
 ## Disclaimer

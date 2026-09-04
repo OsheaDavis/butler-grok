@@ -45,7 +45,8 @@ export function HomeTile({ id, x, y, lines, countLabel, status, onMove, onOpen }
         if (!drag.current) return;
         const dx = e.clientX - drag.current.ox;
         const dy = e.clientY - drag.current.oy;
-        if (Math.abs(dx) + Math.abs(dy) > 4) drag.current.moved = true;
+        // High-DPI Windows + slight hand shake used to turn clicks into drags (4px).
+        if (Math.abs(dx) + Math.abs(dy) > 12) drag.current.moved = true;
         if (drag.current.moved) {
           onMove(
             id,
@@ -58,6 +59,9 @@ export function HomeTile({ id, x, y, lines, countLabel, status, onMove, onOpen }
         const wasClick = drag.current && !drag.current.moved;
         drag.current = null;
         if (wasClick) onOpen(id);
+      }}
+      onPointerCancel={() => {
+        drag.current = null;
       }}
     >
       <div className="tile-title">

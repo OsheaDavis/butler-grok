@@ -41,8 +41,8 @@ type Props = {
   chatBusy?: boolean;
   micOn?: boolean;
   onToggleMic?: () => void;
-  /** When set (Mode B/C + key), Speak uses xAI STT instead of broken Electron Web Speech. */
-  apiKey?: string;
+  /** When set (Mode B/C + key stored in main), Speak uses xAI STT. */
+  hasApiKey?: boolean;
   useCloudStt?: boolean;
   onToast?: (msg: string) => void;
   /** Dock (main window) or standalone floating OS panel. */
@@ -95,7 +95,7 @@ export function ChatDock({
   chatBusy,
   micOn,
   onToggleMic,
-  apiKey,
+  hasApiKey,
   useCloudStt,
   onToast,
   variant = 'dock',
@@ -194,9 +194,8 @@ export function ChatDock({
       try {
         const blob = await micRecRef.current.stop();
         micRecRef.current = null;
-        const key = (apiKey || '').trim();
         const name = recorderExtension(blob.type);
-        const result = await transcribeWithXai(key, blob, name);
+        const result = await transcribeWithXai(undefined, blob, name);
         if (result.ok) {
           onDraft(result.text);
           toast('Ready — press Enter again to send.');
@@ -230,7 +229,7 @@ export function ChatDock({
       return;
     }
 
-    const preferCloud = Boolean(useCloudStt && apiKey?.trim());
+    const preferCloud = Boolean(useCloudStt && hasApiKey);
 
     if (preferCloud) {
       try {
@@ -598,6 +597,8 @@ export function ChatDock({
               onDraft(v);
             }}
             onKeyDown={(e) => {
+              const composing =
+                e.nativeEvent.isComposing || e.keyCode === 229;
               if (e.key === 'Escape' && showSlashMenu) {
                 e.preventDefault();
                 onDraft('');
@@ -616,6 +617,7 @@ export function ChatDock({
               }
               // Enter again → send transcript / typed message
               if (e.key === 'Enter' && !e.shiftKey) {
+                if (composing) return;
                 e.preventDefault();
                 if (!chatBusy && !transcribing && !listening && draft.trim()) {
                   onSend(draft);
@@ -627,7 +629,10 @@ export function ChatDock({
             type="button"
             className="send"
             disabled={!draft.trim() || chatBusy || transcribing || listening}
-            onClick={() => onSend(draft)}
+            onClick={() => {
+              if (!draft.trim() || chatBusy || transcribing || listening) return;
+              onSend(draft);
+            }}
             title={listening ? 'Stop speaking first (Enter)' : 'Send (Enter)'}
           >
             {chatBusy ? '…' : listening ? '…' : 'Send'}

@@ -1,5 +1,7 @@
-﻿import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react';
 import type { AppStore } from '../hooks/useAppStore';
+import { listTasks } from '../lib/types';
+import { LIMITS } from '../lib/limits';
 import { MiniButlerWave } from './MiniButlerWave';
 
 export function FoldersBody({ store }: { store: AppStore }) {
@@ -72,7 +74,7 @@ export function ConversationsBody({
       </p>
       <input
         className="search-box"
-        placeholder="Searchâ€¦"
+        placeholder="Search…"
         value={q}
         onChange={(e) => setQ(e.target.value)}
       />
@@ -87,8 +89,8 @@ export function ConversationsBody({
               <div className="grow">
                 <div className="title">{c.title || 'Untitled'}</div>
                 <div className="meta">
-                  {new Date(c.updatedAt).toLocaleString()} Â· {c.messages.length} messages
-                  {c.saved ? ' Â· saved' : ''}
+                  {new Date(c.updatedAt).toLocaleString()} · {c.messages.length} messages
+                  {c.saved ? ' · saved' : ''}
                 </div>
               </div>
               <div className="row-actions">
@@ -162,7 +164,7 @@ export function ProjectsBody({ store }: { store: AppStore }) {
               setName('');
             }}
           >
-            Add ({store.data.projects.length}/10)
+            Add ({store.data.projects.length}/{LIMITS.projects})
           </button>
         </div>
       </div>
@@ -389,6 +391,7 @@ export function TasksBody({ store }: { store: AppStore }) {
     return d.toISOString().slice(0, 16);
   });
   const [prompt, setPrompt] = useState('');
+  const tasks = listTasks(store.data);
 
   return (
     <>
@@ -396,6 +399,44 @@ export function TasksBody({ store }: { store: AppStore }) {
         Up to 10 tasks. For <strong>work</strong> tasks you need <strong>Grok Build running</strong> and{' '}
         <strong>Butler Grok open</strong>. Closing the app stops all tasks.
       </p>
+      {!tasks.length ? (
+        <div className="empty" style={{ padding: 12 }}>
+          No tasks yet.
+        </div>
+      ) : (
+        <div className="list" style={{ marginBottom: 16 }}>
+          {tasks.map((t) => (
+            <div key={t.id} className="list-item">
+              {store.waveTaskId === t.id || t.type === 'remind' ? (
+                <MiniButlerWave title="Butler reminder" />
+              ) : null}
+              <div className="grow">
+                <div className="title">
+                  {t.title}{' '}
+                  <span className="meta">
+                    · {t.type === 'remind' ? 'Remind' : 'Work'} · {t.repeat}
+                    {!t.enabled ? ' · off' : ''}
+                    {t.missed ? ' · missed while closed' : ''}
+                  </span>
+                </div>
+                <div className="meta">Next: {new Date(t.runAt).toLocaleString()}</div>
+              </div>
+              <div className="row-actions">
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => store.updateTask(t.id, { enabled: !t.enabled })}
+                >
+                  {t.enabled ? 'Disable' : 'Enable'}
+                </button>
+                <button type="button" className="btn danger" onClick={() => store.removeTask(t.id)}>
+                  Delete
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="field">
         <label>Title</label>
         <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Remind me to write" />
@@ -421,7 +462,6 @@ export function TasksBody({ store }: { store: AppStore }) {
       <button
         type="button"
         className="btn primary"
-        style={{ marginBottom: 14 }}
         onClick={() => {
           if (!title.trim()) return;
           store.addTask({
@@ -436,50 +476,14 @@ export function TasksBody({ store }: { store: AppStore }) {
           setPrompt('');
         }}
       >
-        Add task ({store.data.tasks.length}/10)
+        Add task ({tasks.length}/10)
       </button>
-      {!store.data.tasks.length ? (
-        <div className="empty">No tasks yet.</div>
-      ) : (
-        <div className="list">
-          {store.data.tasks.map((t) => (
-            <div key={t.id} className="list-item">
-              {store.waveTaskId === t.id || t.type === 'remind' ? (
-                <MiniButlerWave title="Butler reminder" />
-              ) : null}
-              <div className="grow">
-                <div className="title">
-                  {t.title}{' '}
-                  <span className="meta">
-                    Â· {t.type === 'remind' ? 'Remind' : 'Work'} Â· {t.repeat}
-                    {!t.enabled ? ' Â· off' : ''}
-                    {t.missed ? ' Â· missed while closed' : ''}
-                  </span>
-                </div>
-                <div className="meta">Next: {new Date(t.runAt).toLocaleString()}</div>
-              </div>
-              <div className="row-actions">
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => store.updateTask(t.id, { enabled: !t.enabled })}
-                >
-                  {t.enabled ? 'Disable' : 'Enable'}
-                </button>
-                <button type="button" className="btn danger" onClick={() => store.removeTask(t.id)}>
-                  Delete
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
     </>
   );
 }
 
 export function CurrentlyOpenBody({ store }: { store: AppStore }) {
-  const upcoming = [...store.data.tasks]
+  const upcoming = [...listTasks(store.data)]
     .filter((t) => t.enabled)
     .sort((a, b) => a.runAt.localeCompare(b.runAt))
     .slice(0, 5);
@@ -503,7 +507,7 @@ export function CurrentlyOpenBody({ store }: { store: AppStore }) {
               <div className="grow">
                 <div className="title">{w.title}</div>
                 <div className="meta">
-                  {w.status} Â· {w.detail}
+                  {w.status} · {w.detail}
                 </div>
               </div>
               <button
@@ -541,7 +545,7 @@ export function CurrentlyOpenBody({ store }: { store: AppStore }) {
               <div className="grow">
                 <div className="title">{t.title}</div>
                 <div className="meta">
-                  {t.type} Â· {new Date(t.runAt).toLocaleString()}
+                  {t.type} · {new Date(t.runAt).toLocaleString()}
                 </div>
               </div>
               <button type="button" className="btn" onClick={() => store.openPanel('tasks')}>
@@ -559,7 +563,7 @@ export function CurrentlyOpenBody({ store }: { store: AppStore }) {
               <div key={w.id} className="list-item">
                 <div className="grow">
                   <div className="title">
-                    {w.title} Â· {w.status}
+                    {w.title} · {w.status}
                   </div>
                   <div className="meta">{w.detail}</div>
                 </div>
@@ -596,7 +600,7 @@ export function MarketplaceBody({ store }: { store: AppStore }) {
 
   const refresh = async () => {
     if (!window.butler?.grokCli) {
-      store.showToast('Grok CLI bridge not available â€” run Butler as the desktop app.');
+      store.showToast('Grok CLI bridge not available — run Butler as the desktop app.');
       return;
     }
     setLoading(true);
@@ -715,7 +719,7 @@ export function MarketplaceBody({ store }: { store: AppStore }) {
 
     // Try silent install first (with full grok path); fall back to terminal
     if (window.butler?.grokCli) {
-      store.showToast(`Installing ${name || source}â€¦`);
+      store.showToast(`Installing ${name || source}…`);
       const r = await window.butler.grokCli(['plugin', 'install', source.trim(), '--trust']);
       const out = `${r.stdout || ''}\n${r.stderr || ''}`.trim();
       setLog(out + `\nexit ${r.code}`);
@@ -725,14 +729,14 @@ export function MarketplaceBody({ store }: { store: AppStore }) {
         setBusyName(null);
         store.showToast(
           already
-            ? `${name || source} is already installed â€” list refreshed.`
+            ? `${name || source} is already installed — list refreshed.`
             : `Installed ${name || source}`
         );
         await refresh();
         return;
       }
       // Fall through to terminal so user can see the error
-      store.showToast('Silent install failed â€” opening terminalâ€¦');
+      store.showToast('Silent install failed — opening terminal…');
     }
 
     if (window.butler?.grokOpenTerminal) {
@@ -744,7 +748,7 @@ export function MarketplaceBody({ store }: { store: AppStore }) {
       setLog(
         `Opened terminal ready to install:\n  grok plugin install ${source.trim()} --trust\n\nPress any key in that window to run.`
       );
-      store.showToast('Copied install command â€” new tab â†’ paste â†’ Enter');
+      store.showToast('Copied install command — new tab → paste → Enter');
       return;
     }
 
@@ -754,12 +758,12 @@ export function MarketplaceBody({ store }: { store: AppStore }) {
 
   const runUninstall = async (name: string) => {
     if (!window.butler?.grokCli || !name) return;
-    if (!confirm(`Uninstall plugin â€œ${name}â€?`)) return;
+    if (!confirm(`Uninstall plugin “${name}”?`)) return;
     setBusyName(name);
     const r = await window.butler.grokCli(['plugin', 'uninstall', name]);
     setBusyName(null);
     setLog((r.stdout || '') + (r.stderr ? `\n${r.stderr}` : '') + `\nexit ${r.code}`);
-    store.showToast(r.ok ? `Uninstalled ${name}` : `Uninstall failed â€” see log`);
+    store.showToast(r.ok ? `Uninstalled ${name}` : `Uninstall failed — see log`);
     await refresh();
   };
 
@@ -772,7 +776,7 @@ export function MarketplaceBody({ store }: { store: AppStore }) {
       setLog(
         `Plugin update command copied.\n\n1. Open a NEW TAB (Ctrl+Shift+T or +)\n2. Paste\n3. Enter\n\nCommand: grok plugin update ${name}`
       );
-      store.showToast('Copied update command â€” new tab â†’ paste â†’ Enter');
+      store.showToast('Copied update command — new tab → paste → Enter');
       return;
     }
     if (!window.butler?.grokCli) {
@@ -782,7 +786,7 @@ export function MarketplaceBody({ store }: { store: AppStore }) {
     const r = await window.butler.grokCli(['plugin', 'update', name]);
     setBusyName(null);
     setLog((r.stdout || '') + (r.stderr ? `\n${r.stderr}` : '') + `\nexit ${r.code}`);
-    store.showToast(r.ok ? `Updated ${name}` : `Update failed â€” see log`);
+    store.showToast(r.ok ? `Updated ${name}` : `Update failed — see log`);
     await refresh();
   };
 
@@ -805,17 +809,17 @@ export function MarketplaceBody({ store }: { store: AppStore }) {
       >
         <strong>Simple (Butler buttons)</strong>
         <br />
-        â€¢ List plugins Â· Install / Update / Remove
+        • List plugins · Install / Update / Remove
         <br />
-        â€¢ Install opens a helper: command is copied â†’ <strong>new tab â†’ paste â†’ Enter</strong>
+        • Install opens a helper: command is copied → <strong>new tab → paste → Enter</strong>
         <br />
         <strong style={{ display: 'inline-block', marginTop: 6 }}>Advanced (full Grok Marketplace)</strong>
         <br />
-        â€¢ Click <strong>Advanced: Grok Marketplace</strong>
+        • Click <strong>Advanced: Grok Marketplace</strong>
         <br />
-        â€¢ New tab â†’ paste <code>grok</code> â†’ Enter â†’ press <code>/</code> â†’ Marketplace
+        • New tab → paste <code>grok</code> → Enter → press <code>/</code> → Marketplace
         <br />
-        â€¢ Use that for OAuth / complex installs, then Refresh here
+        • Use that for OAuth / complex installs, then Refresh here
       </div>
       <div className="row-actions" style={{ marginBottom: 10, flexWrap: 'wrap' }}>
         <button
@@ -823,7 +827,7 @@ export function MarketplaceBody({ store }: { store: AppStore }) {
           className={`btn ${tab === 'plugins' ? 'primary' : ''}`}
           onClick={() => setTab('plugins')}
         >
-          Plugins ({installedCount}/{plugins.length || 'â€¦'})
+          Plugins ({installedCount}/{plugins.length || '…'})
         </button>
         <button
           type="button"
@@ -833,13 +837,13 @@ export function MarketplaceBody({ store }: { store: AppStore }) {
           MCP servers
         </button>
         <button type="button" className="btn" disabled={loading} onClick={() => void refresh()}>
-          {loading ? 'Refreshingâ€¦' : 'Refresh'}
+          {loading ? 'Refreshing…' : 'Refresh'}
         </button>
         <button
           type="button"
           className="btn primary"
           onClick={() => void store.openGrokTerminal('marketplace')}
-          title="Copies 'grok' and shows steps: new tab â†’ paste â†’ Enter â†’ / Marketplace"
+          title="Copies 'grok' and shows steps: new tab → paste → Enter → / Marketplace"
         >
           Advanced: Grok Marketplace
         </button>
@@ -847,7 +851,7 @@ export function MarketplaceBody({ store }: { store: AppStore }) {
           type="button"
           className="btn"
           onClick={() => void store.openGrokTerminal('grok')}
-          title="Copies 'grok' â€” open new tab, paste, Enter"
+          title="Copies 'grok' — open new tab, paste, Enter"
         >
           Start Grok (new tab paste)
         </button>
@@ -857,7 +861,7 @@ export function MarketplaceBody({ store }: { store: AppStore }) {
         <>
           <input
             className="search-box"
-            placeholder="Search pluginsâ€¦"
+            placeholder="Search plugins…"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
           />
@@ -881,7 +885,7 @@ export function MarketplaceBody({ store }: { store: AppStore }) {
           {!filtered.length ? (
             <div className="empty">
               {loading
-                ? 'Loading marketplaceâ€¦'
+                ? 'Loading marketplace…'
                 : 'No plugins listed. Click Refresh (needs Grok Build on PATH).'}
             </div>
           ) : (
@@ -896,18 +900,18 @@ export function MarketplaceBody({ store }: { store: AppStore }) {
                       <div className="title">
                         {p.name}{' '}
                         <span className="meta" style={{ marginLeft: 6 }}>
-                          {installed ? 'âœ“ installed' : p.status || 'available'}
-                          {p.version ? ` Â· v${p.version}` : ''}
+                          {installed ? '✓ installed' : p.status || 'available'}
+                          {p.version ? ` · v${p.version}` : ''}
                         </span>
                       </div>
                       {p.description ? (
                         <div className="meta" style={{ marginTop: 2 }}>
                           {p.description.slice(0, 160)}
-                          {p.description.length > 160 ? 'â€¦' : ''}
+                          {p.description.length > 160 ? '…' : ''}
                         </div>
                       ) : null}
                       <div className="meta">
-                        {p.marketplace ? `${p.marketplace} Â· ` : ''}
+                        {p.marketplace ? `${p.marketplace} · ` : ''}
                         {source || p.path || ''}
                       </div>
                     </div>
@@ -938,7 +942,7 @@ export function MarketplaceBody({ store }: { store: AppStore }) {
                           disabled={!source || Boolean(busyName)}
                           onClick={() => void runInstall(source, p.name)}
                         >
-                          {busyName === p.name || busyName === source ? 'â€¦' : 'Install'}
+                          {busyName === p.name || busyName === source ? '…' : 'Install'}
                         </button>
                       )}
                     </div>
