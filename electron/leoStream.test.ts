@@ -1,14 +1,14 @@
-'use strict';
-
 /**
  * Progressive Leo TTS serving — no xAI call, no Windows MediaPlayer.
  */
+import { createRequire } from 'node:module';
+import fs from 'node:fs';
+import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
+import { describe, expect, it } from 'vitest';
 
-const fs = require('fs');
-const http = require('http');
-const os = require('os');
-const path = require('path');
-const { describe, expect, it } = require('vitest');
+const require = createRequire(import.meta.url);
 const {
   MIN_PLAY_BYTES,
   parseByteRange,
@@ -17,29 +17,46 @@ const {
   startLeoStreamServer,
   closeLeoStreamServer,
   buildLeoMediaPlayerScript,
-} = require('./leoStream.cjs');
+} = require('./leoStream.cjs') as {
+  MIN_PLAY_BYTES: number;
+  parseByteRange: (header: string | undefined) => { start: number; end: number | null } | null;
+  createLeoDownloadState: (contentLength: number | null) => {
+    bytesWritten: number;
+    finished: boolean;
+    aborted: boolean;
+  };
+  writeStreamToGrowingFile: (
+    chunks: AsyncIterable<Buffer>,
+    file: string,
+    state: { bytesWritten: number; finished: boolean },
+    onProgress?: (n: number) => void
+  ) => Promise<void>;
+  startLeoStreamServer: (
+    file: string,
+    state: { bytesWritten: number; finished: boolean; aborted?: boolean }
+  ) => Promise<{ server: { close: () => void }; url: string }>;
+  closeLeoStreamServer: (server: { close: () => void }) => void;
+  buildLeoMediaPlayerScript: (url: string) => string;
+};
 
-function tmpFile(name) {
+function tmpFile(name: string) {
   return path.join(os.tmpdir(), `butler-leo-${name}-${Date.now()}-${process.pid}.bin`);
 }
 
-function httpGet(url, headers = {}) {
-  return new Promise((resolve, reject) => {
+function httpGet(url: string, headers: Record<string, string> = {}) {
+  return new Promise<{
+    status: number | undefined;
+    headers: http.IncomingHttpHeaders;
+    body: Buffer;
+  }>((resolve, reject) => {
     const req = http.get(url, { headers }, (res) => {
-      const chunks = [];
-      let receivedBeforeFinish = false;
-      res.on('data', (c) => {
-        chunks.push(c);
-        if (typeof res._markBeforeFinish === 'function') {
-          receivedBeforeFinish = res._markBeforeFinish();
-        }
-      });
+      const chunks: Buffer[] = [];
+      res.on('data', (c) => chunks.push(c));
       res.on('end', () => {
         resolve({
           status: res.statusCode,
           headers: res.headers,
           body: Buffer.concat(chunks),
-          receivedBeforeFinish,
         });
       });
       res.on('error', reject);
@@ -48,10 +65,18 @@ function httpGet(url, headers = {}) {
   });
 }
 
-async function getWhileGrowing(url, state) {
-  return new Promise((resolve, reject) => {
+async function getWhileGrowing(
+  url: string,
+  state: { finished: boolean }
+) {
+  return new Promise<{
+    status: number | undefined;
+    headers: http.IncomingHttpHeaders;
+    body: Buffer;
+    receivedBeforeFinish: boolean;
+  }>((resolve, reject) => {
     const req = http.get(url, (res) => {
-      const chunks = [];
+      const chunks: Buffer[] = [];
       let receivedBeforeFinish = false;
       res.on('data', (c) => {
         chunks.push(c);
@@ -71,7 +96,12 @@ async function getWhileGrowing(url, state) {
   });
 }
 
-async function writeSlowly(filePath, state, parts, gapMs) {
+async function writeSlowly(
+  filePath: string,
+  state: { bytesWritten: number; finished: boolean },
+  parts: Buffer[],
+  gapMs: number
+) {
   const fd = fs.openSync(filePath, 'w');
   try {
     for (const part of parts) {
@@ -98,7 +128,7 @@ describe('writeStreamToGrowingFile', () => {
   it('reports growing byte counts and finishes the file', async () => {
     const file = tmpFile('pipe');
     const state = createLeoDownloadState(null);
-    const seen = [];
+    const seen: number[] = [];
     async function* chunks() {
       yield Buffer.from('abc');
       yield Buffer.from('defgh');
