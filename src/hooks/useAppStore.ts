@@ -6,7 +6,6 @@ import {
   mergeHomeTiles,
   type AppData,
   type ChatAttachment,
-  type ChatMessage,
   type Conversation,
   type DisplayItem,
   type DisplayVote,
@@ -22,51 +21,38 @@ import {
 } from '../lib/types';
 import { LIMITS } from '../lib/limits';
 import { uid } from '../lib/id';
-import { assistantAckForAction, detectUiAction } from '../lib/intent';
-import {
-  buildSystemPrompt,
-  textForSpeech,
-  xaiChatCompletionStream,
-} from '../lib/xaiChat';
-import { speakText } from '../lib/speech';
-import { speakWithLeo, stopLeoAudio } from '../lib/leoTts';
 import { createLeoSpeakQueue } from '../lib/leoSpeakQueue';
-import {
-  consumeSpeechPieces,
-  flushSpeechRemainder,
-  prepareStreamingSpeech,
-} from '../lib/speechSentences';
+import { stopLeoAudio } from '../lib/leoTts';
 import { ensureSampleData } from '../lib/sampleData';
-import {
-  extractMediaFromText,
-  mediaToDisplayItems,
-  normalizeAppDataDisplayAndProjects,
-} from '../lib/mediaExtract';
-import { parseSlashCommand } from '../lib/slashCommands';
-import {
-  buildEditPromptFromAttachment,
-  detectAttachedImageEdit,
-  detectImagePrompt,
-  generateXaiImage,
-} from '../lib/xaiImage';
+import { normalizeAppDataDisplayAndProjects } from '../lib/mediaExtract';
 import { API_KEY_MASK, isApiKeyMask } from '../lib/apiKeyUi';
-
-const SETTINGS_FILE = 'settings.json';
-const DATA_FILE = 'appdata.json';
-
-function browserFallbackLoad<T>(key: string, defaults: T): { data: T; recovered: boolean } {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return { data: defaults, recovered: false };
-    return { data: JSON.parse(raw) as T, recovered: false };
-  } catch {
-    return { data: defaults, recovered: false };
-  }
-}
-
-function browserFallbackSave(key: string, data: unknown) {
-  localStorage.setItem(key, JSON.stringify(data));
-}
+import {
+  DATA_FILE,
+  SETTINGS_FILE,
+  browserFallbackLoad,
+  persistAppFiles,
+} from './store/persist';
+import { runSendChat } from './store/sendChat';
+import {
+  appendChatMessages,
+  ensureActiveConversationData,
+  localButlerReplyText,
+} from './store/conversationActions';
+import {
+  displayItemsFromManualUrl,
+  displayItemsFromPaths,
+  ingestDisplayFromReply,
+  prependDisplayItems,
+  removeDisplayItemFromData,
+} from './store/displayActions';
+import {
+  beginStreamingSpeech as beginStreamingSpeechRun,
+  finishStreamingSpeech as finishStreamingSpeechRun,
+  pushStreamingSpeech as pushStreamingSpeechRun,
+  resetStreamingSpeech as resetStreamingSpeechRun,
+  speakReplyText,
+  stopVoicePlayback,
+} from './store/speechRuntime';
 
 export function useAppStore() {
   const [ready, setReady] = useState(false);
@@ -170,15 +156,7 @@ export function useAppStore() {
   }, []);
 
   const persist = useCallback(async () => {
-    const s = settingsRef.current;
-    const d = dataRef.current;
-    if (window.butler) {
-      await window.butler.save(SETTINGS_FILE, { ...s, apiKey: '' });
-      await window.butler.save(DATA_FILE, d);
-    } else {
-      browserFallbackSave(SETTINGS_FILE, s);
-      browserFallbackSave(DATA_FILE, d);
-    }
+    await persistAppFiles(settingsRef.current, dataRef.current);
   }, []);
 
   const schedulePersist = useCallback(() => {
@@ -512,26 +490,9 @@ export function useAppStore() {
   );
 
   const ensureActiveConversation = useCallback((): Conversation => {
-    const d = dataRef.current;
-    if (d.activeConversationId) {
-      const found = d.conversations.find((c) => c.id === d.activeConversationId);
-      if (found) return found;
-    }
-    const conv: Conversation = {
-      id: uid('conv'),
-      title: 'New chat',
-      messages: [],
-      projectId: d.activeProjectId,
-      folderIds: [...d.selectedFolderIdsForNewChat],
-      updatedAt: new Date().toISOString(),
-      saved: false,
-    };
-    setData((prev) => ({
-      ...prev,
-      conversations: [conv, ...prev.conversations].slice(0, 40),
-      activeConversationId: conv.id,
-    }));
-    return conv;
+    const { next, conversation } = ensureActiveConversationData(dataRef.current);
+    if (next !== dataRef.current) setData(next);
+    return conversation;
   }, []);
 
   const appendMessages = useCallback(
@@ -541,84 +502,15 @@ export function useAppStore() {
       projectId?: string | null,
       thinking?: string
     ) => {
-      const now = new Date().toISOString();
-      const userMsg: ChatMessage = {
-        id: uid('msg'),
-        role: 'user',
-        content: userText,
-        createdAt: now,
-      };
-      const asstMsg: ChatMessage = {
-        id: uid('msg'),
-        role: 'assistant',
-        content: assistantText,
-        createdAt: now,
-        thinking: thinking?.trim() || undefined,
-      };
       setLastAssistantText(assistantText);
-      setData((prev) => {
-        let convs = [...prev.conversations];
-        let activeId = prev.activeConversationId;
-        let conv = convs.find((c) => c.id === activeId);
-        if (!conv) {
-          conv = {
-            id: uid('conv'),
-            title: userText.slice(0, 48) || 'New chat',
-            messages: [],
-            projectId: projectId ?? prev.activeProjectId,
-            folderIds: [...prev.selectedFolderIdsForNewChat],
-            updatedAt: now,
-            saved: false,
-          };
-          convs = [conv, ...convs];
-          activeId = conv.id;
-        }
-        convs = convs.map((c) =>
-          c.id === activeId
-            ? {
-                ...c,
-                title: c.messages.length === 0 ? userText.slice(0, 48) || c.title : c.title,
-                messages: [...c.messages, userMsg, asstMsg],
-                updatedAt: now,
-                projectId: projectId !== undefined ? projectId : c.projectId,
-              }
-            : c
-        );
-        // Keep recents bounded in UI; store a bit more
-        return {
-          ...prev,
-          conversations: convs.slice(0, 40),
-          activeConversationId: activeId,
-          draft: '',
-        };
-      });
+      setData((prev) => appendChatMessages(prev, userText, assistantText, projectId, thinking));
     },
     []
   );
 
   const localButlerReply = useCallback(
-    (userText: string, actionAck: string | null, project?: Project | null) => {
-      if (actionAck) return actionAck;
-      const proj = project ? ` (project: ${project.name})` : '';
-      const mode = settingsRef.current.connectionMode;
-      if (settingsRef.current.demoMode) {
-        return (
-          `I'm Butler Grok${proj}. Demo mode is on — I can organize projects, tasks, and panels. ` +
-          `Turn off Demo mode in Settings and use Mode B/C with an API key for full cloud chat. ` +
-          `You said: “${userText.slice(0, 180)}${userText.length > 180 ? '…' : ''}”`
-        );
-      }
-      if (mode === 'A') {
-        return (
-          `I'm Butler Grok${proj}. Mode A uses Grok Build on this PC for agent work. ` +
-          (grokConnected
-            ? 'Grok Build is detected. For full coding sessions use Start Grok; here I still help with projects, tasks, and notes. '
-            : 'Grok Build is not detected yet — click Start Grok. ') +
-          `You said: “${userText.slice(0, 180)}${userText.length > 180 ? '…' : ''}”`
-        );
-      }
-      return `I'm Butler Grok${proj}. Add an API key in Settings for cloud replies, or enable Demo mode.`;
-    },
+    (userText: string, actionAck: string | null, project?: Project | null) =>
+      localButlerReplyText(userText, actionAck, settingsRef.current, grokConnected, project),
     [grokConnected]
   );
 
@@ -636,196 +528,49 @@ export function useAppStore() {
     []
   );
 
+  const speechRefs = {
+    speechTakenRef,
+    speechSpokenCharsRef,
+    speechActiveRef,
+    voiceCancelledRef,
+    hasApiKeyRef,
+    settingsRef,
+    leoQueueRef,
+  };
+
   const resetStreamingSpeech = useCallback(() => {
-    speechTakenRef.current = 0;
-    speechSpokenCharsRef.current = 0;
-    speechActiveRef.current = false;
-    leoQueueRef.current.reset();
+    resetStreamingSpeechRun(speechRefs);
   }, []);
 
-  const beginStreamingSpeech = useCallback(() => {
-    const s = settingsRef.current;
-    const canLeo =
-      hasApiKeyRef.current &&
-      (s.connectionMode === 'B' || s.connectionMode === 'C') &&
-      s.butlerVoiceOn &&
-      !s.muteSounds;
-    resetStreamingSpeech();
-    voiceCancelledRef.current = false;
-    if (!canLeo) return false;
-    stopLeoAudio();
-    speechActiveRef.current = true;
-    return true;
-  }, [resetStreamingSpeech]);
+  const beginStreamingSpeech = useCallback(() => beginStreamingSpeechRun(speechRefs), []);
 
   const pushStreamingSpeech = useCallback((full: string) => {
-    if (!speechActiveRef.current || voiceCancelledRef.current) return;
-    const prepared = prepareStreamingSpeech(full);
-    const next = consumeSpeechPieces(
-      prepared,
-      speechTakenRef.current,
-      speechSpokenCharsRef.current
-    );
-    speechTakenRef.current = next.nextTaken;
-    speechSpokenCharsRef.current = next.nextSpokenChars;
-    for (const piece of next.pieces) {
-      leoQueueRef.current.enqueue(piece);
-    }
+    pushStreamingSpeechRun(speechRefs, full);
   }, []);
 
   const finishStreamingSpeech = useCallback((full: string) => {
-    if (!speechActiveRef.current) return false;
-    if (voiceCancelledRef.current) {
-      resetStreamingSpeech();
-      return true;
-    }
-    const prepared = prepareStreamingSpeech(full);
-    const tail = flushSpeechRemainder(
-      prepared,
-      speechTakenRef.current,
-      speechSpokenCharsRef.current
-    );
-    if (tail) leoQueueRef.current.enqueue(tail);
-    const used = leoQueueRef.current.wasUsed() || Boolean(tail);
-    leoQueueRef.current.finish();
-    speechActiveRef.current = false;
-    return used;
-  }, [resetStreamingSpeech]);
+    return finishStreamingSpeechRun(speechRefs, full);
+  }, []);
 
   const stopVoice = useCallback(() => {
-    voiceCancelledRef.current = true;
-    speechActiveRef.current = false;
-    leoQueueRef.current.reset();
-    stopLeoAudio();
-    if ('speechSynthesis' in window) {
-      try {
-        window.speechSynthesis.cancel();
-      } catch {
-        /* ignore */
-      }
-    }
-    setSpeaking(false);
-    showToast('Voice stopped.');
+    stopVoicePlayback(speechRefs, setSpeaking, showToast);
   }, [showToast]);
 
   const speakReply = useCallback((reply: string) => {
-    voiceCancelledRef.current = false;
-    // Do NOT set speaking yet — wait until audio actually starts (sync mouth video + VU)
-    setSpeaking(false);
-    const s = settingsRef.current;
-    if (!s.butlerVoiceOn || s.muteSounds) {
-      return;
-    }
-
-    // Don't read huge code dumps aloud — speak a short summary-friendly version
-    const spoken = textForSpeech(reply);
-    if (!spoken) {
-      return;
-    }
-
-    const canLeo =
-      hasApiKeyRef.current && (s.connectionMode === 'B' || s.connectionMode === 'C');
-
-    // Stream TTS in main as bytes arrive; mouth/VU still wait for real LEO_PLAY_START
-
-    const markStart = () => {
-      if (voiceCancelledRef.current) return;
-      setSpeaking(true);
-      setLeoReady(true);
-    };
-    const markEnd = () => setSpeaking(false);
-
-    const fallbackSystem = (why?: string) => {
-      if (voiceCancelledRef.current) {
-        markEnd();
-        return;
-      }
-      if (why) {
-        showToast(`Leo failed — using Windows voice. (${why.slice(0, 90)})`);
-        setLeoReady(false);
-      }
-      const ok = speakText(spoken, {
-        onStart: () => {
-          if (voiceCancelledRef.current) {
-            try {
-              window.speechSynthesis.cancel();
-            } catch {
-              /* ignore */
-            }
-            markEnd();
-            return;
-          }
-          markStart();
-        },
-        onEnd: markEnd,
-      });
-      if (!ok) markEnd();
-    };
-
-    if (canLeo) {
-      if ('speechSynthesis' in window) {
-        try {
-          window.speechSynthesis.cancel();
-        } catch {
-          /* ignore */
-        }
-      }
-      void speakWithLeo(undefined, spoken, {
-        onStart: markStart,
-        onEnd: markEnd,
-        onError: (msg) => {
-          if (msg) setLeoReady(false);
-        },
-      }).then((r) => {
-        if (voiceCancelledRef.current || (r.ok && r.cancelled)) {
-          markEnd();
-          return;
-        }
-        if (!r.ok) {
-          fallbackSystem(r.error);
-        } else {
-          setLeoReady(true);
-          markEnd();
-        }
-      });
-      return;
-    }
-
-    if (voiceCancelledRef.current) {
-      markEnd();
-      return;
-    }
-    showToast('Cloud mode/key needed for Leo — using Windows voice.');
-    const ok = speakText(spoken, {
-      onStart: markStart,
-      onEnd: markEnd,
-    });
-    if (!ok) markEnd();
+    speakReplyText(speechRefs, reply, setSpeaking, setLeoReady, showToast);
   }, [showToast]);
 
   const ingestMediaFromReply = useCallback(
     (text: string) => {
-      const extracted = extractMediaFromText(text);
-      if (!extracted.length) return;
-      // Prefer active project; else tag from the active conversation's project
-      const conv = dataRef.current.conversations.find(
-        (c) => c.id === dataRef.current.activeConversationId
-      );
-      const projectId =
-        dataRef.current.activeProjectId || conv?.projectId || null;
-      const items = mediaToDisplayItems(extracted, { projectId });
+      let projectId: string | null = null;
+      let items: DisplayItem[] = [];
       setData((d) => {
-        const prev = d.displayItems || [];
-        const existing = new Set(prev.map((p) => p.src.slice(0, 200)));
-        const fresh = items.filter((i) => !existing.has(i.src.slice(0, 200)));
-        if (!fresh.length) return d;
-        const displayItems = [...fresh, ...prev].slice(0, LIMITS.displayItems);
-        return {
-          ...d,
-          displayItems,
-          activeDisplayId: fresh[0].id,
-        };
+        const result = ingestDisplayFromReply(d, text);
+        projectId = result.projectId;
+        items = result.added;
+        return result.next;
       });
+      if (!items.length) return;
       if (projectId) openPanel(projectDisplayPanelId(projectId));
       else openPanel('display');
       showToast(
@@ -1010,454 +755,43 @@ export function useAppStore() {
 
   const sendChat = useCallback(
     async (text: string) => {
-      const trimmed = text.trim();
-      if (!trimmed || chatBusy) return;
-      noteUserActivity();
-
-      // --- Slash commands ---
-      const slash = parseSlashCommand(trimmed);
-      let imagePrompt: string | null = null;
-
-      if (slash) {
-        setData((d) => ({ ...d, draft: '' }));
-        if (slash.type === 'help' || slash.type === 'unknown') {
-          appendMessages(trimmed, slash.type === 'help' ? slash.text : slash.message);
-          return;
-        }
-        if (slash.type === 'new-chat') {
-          startNewConversation();
-          appendMessages(trimmed, slash.message);
-          return;
-        }
-        if (slash.type === 'settings') {
-          setSettingsOpen(true);
-          appendMessages(trimmed, slash.message);
-          return;
-        }
-        if (slash.type === 'open-panel') {
-          openPanel(slash.panel as PanelId);
-          appendMessages(trimmed, slash.message);
-          return;
-        }
-        if (slash.type === 'terminal') {
-          if (slash.action === 'marketplace') openPanel('marketplace');
-          void openGrokTerminal(
-            slash.action === 'update'
-              ? 'update'
-              : slash.action === 'update-alpha'
-                ? 'update-alpha'
-                : slash.action === 'marketplace'
-                  ? 'marketplace'
-                  : 'grok'
-          );
-          appendMessages(trimmed, slash.message);
-          return;
-        }
-        if (slash.type === 'save-chat') {
-          const id = dataRef.current.activeConversationId;
-          const target = dataRef.current.conversations.find((c) => c.id === id);
-          if (!id || !target) {
-            appendMessages(trimmed, 'No active conversation to save yet. Send a normal message first.');
-            return;
-          }
-          const savedCount = dataRef.current.conversations.filter((c) => c.saved).length;
-          if (!target.saved && savedCount >= LIMITS.savedConversations) {
-            appendMessages(
-              trimmed,
-              `Maximum ${LIMITS.savedConversations} saved conversations. Remove one in Conversations first.`
-            );
-            return;
-          }
-          setData((d) => ({
-            ...d,
-            conversations: d.conversations.map((c) =>
-              c.id === id ? { ...c, saved: true } : c
-            ),
-          }));
-          appendMessages(trimmed, 'Conversation saved. Find it under **Conversations**.');
-          return;
-        }
-        if (slash.type === 'sessions') {
-          const recent = [...dataRef.current.conversations]
-            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-            .slice(0, 10);
-          const saved = dataRef.current.conversations.filter((c) => c.saved).slice(0, 20);
-          const lines = [
-            '**Recent chats**',
-            ...(recent.length
-              ? recent.map(
-                  (c, i) =>
-                    `${i + 1}. ${c.title || 'Untitled'} · ${new Date(c.updatedAt).toLocaleString()}${c.saved ? ' · saved' : ''}`
-                )
-              : ['(none yet)']),
-            '',
-            '**Saved chats**',
-            ...(saved.length
-              ? saved.map((c, i) => `${i + 1}. ${c.title || 'Untitled'}`)
-              : ['(none — use /save)']),
-            '',
-            'Open the **Recent** or **Conversations** panels to resume one.',
-          ];
-          appendMessages(trimmed, lines.join('\n'));
-          return;
-        }
-        if (slash.type === 'project') {
-          if (!slash.name) {
-            const list = dataRef.current.projects;
-            const body = list.length
-              ? list.map((p) => `· **${p.name}**${p.id === dataRef.current.activeProjectId ? ' ← active' : ''}`).join('\n')
-              : '(no projects yet — create one in the Projects panel)';
-            openPanel('projects');
-            appendMessages(
-              trimmed,
-              `**Projects**\n${body}\n\nSet one with \`/project Name\` or click **Use** in Projects.`
-            );
-            return;
-          }
-          const q = slash.name.toLowerCase();
-          const match =
-            dataRef.current.projects.find((p) => p.name.toLowerCase() === q) ||
-            dataRef.current.projects.find((p) => p.name.toLowerCase().includes(q));
-          if (!match) {
-            appendMessages(
-              trimmed,
-              `I couldn’t find a project matching “${slash.name}”. Create it in Projects or try another name.`
-            );
-            openPanel('projects');
-            return;
-          }
-          setData((d) => ({ ...d, activeProjectId: match.id }));
-          openPanel('projects');
-          appendMessages(trimmed, `Active project is now **${match.name}**. New images from chat will tag to this project.`);
-          return;
-        }
-        if (slash.type === 'vote') {
-          const id = dataRef.current.activeDisplayId;
-          const items = dataRef.current.displayItems || [];
-          const active = items.find((i) => i.id === id) || items[0];
-          if (!active) {
-            appendMessages(trimmed, 'No Display item open. Generate or add media first, then /like /pass /keep.');
-            const pid = dataRef.current.activeProjectId;
-            if (pid) openPanel(projectDisplayPanelId(pid));
-            else openPanel('display');
-            return;
-          }
-          setData((d) => ({
-            ...d,
-            displayItems: (d.displayItems || []).map((i) =>
-              i.id === active.id ? { ...i, vote: slash.vote } : i
-            ),
-            activeDisplayId: active.id,
-          }));
-          if (active.projectId) openPanel(projectDisplayPanelId(active.projectId));
-          else openPanel('display');
-          appendMessages(trimmed, slash.message + `\n\n_Item: ${active.title}_`);
-          return;
-        }
-        if (slash.type === 'review') {
-          const pid = dataRef.current.activeProjectId;
-          if (!pid) {
-            appendMessages(
-              trimmed,
-              'No active project. Use `/project Name` or **Continue chat** in Projects, then `/review`.'
-            );
-            openPanel('projects');
-            return;
-          }
-          openPanel(projectDisplayPanelId(pid));
-          appendMessages(trimmed, slash.message);
-          return;
-        }
-        if (slash.type === 'imagine') {
-          imagePrompt = slash.prompt;
-        } else {
-          return;
-        }
-      } else {
-        imagePrompt = detectImagePrompt(trimmed);
-      }
-
-      ensureActiveConversation();
-      streamOwnerRef.current = true;
-      setChatBusy(true);
-      setLiveThinking('');
-      setLiveReply('');
-      setRetainedThinking('');
-      publishLive({ busy: true, thinking: '', reply: '', retainedThinking: '' });
-      streamAbortRef.current?.abort();
-      const abort = new AbortController();
-      streamAbortRef.current = abort;
-
-      // Attachment from Display (bring to chat / drag) — prefer edit/recreate over new invent
-      const attachment = dataRef.current.chatAttachment;
-      const attachEdit = attachment ? detectAttachedImageEdit(trimmed) : null;
-      if (attachment && attachEdit) {
-        imagePrompt = buildEditPromptFromAttachment(attachEdit, attachment);
-      } else if (attachment && !imagePrompt) {
-        // User has attachment + invent-style prompt → still ground on attachment if they say "image"
-        if (detectImagePrompt(trimmed) || /image|picture|photo|recreate|modify/i.test(trimmed)) {
-          imagePrompt = buildEditPromptFromAttachment(trimmed, attachment);
-        }
-      }
-
-      // --- Image generation (Imagine API) ---
-      if (imagePrompt) {
-        const s = settingsRef.current;
-        const canCloud =
-          !s.demoMode &&
-          (s.connectionMode === 'B' || s.connectionMode === 'C') &&
-          hasApiKeyRef.current;
-        setLiveThinking(
-          attachment
-            ? 'Recreating from your selected Display image…'
-            : 'Generating image with xAI Imagine…'
-        );
-        if (!canCloud) {
-          const reply =
-            'To generate images, turn **Demo mode Off**, use Mode **B** or **C**, and paste your xAI API key in Settings. Then try again or use `/imagine your prompt`.';
-          appendMessages(trimmed, reply);
-          setChatBusy(false);
-          setLiveThinking('');
-          streamOwnerRef.current = false;
-          return;
-        }
-        // User-visible message includes the attachment so history shows what was edited
-        const userVisible = attachment
-          ? `${trimmed}\n\n_Using attached Display ${attachment.kind}: **${attachment.title}**_\n\n![Attached reference](${attachment.displaySrc || attachment.src})`
-          : trimmed;
-        const gen = await generateXaiImage(undefined, imagePrompt);
-        if (gen.ok) {
-          const reply = attachment
-            ? `Here’s a new version based on **your selected image** (“${attachment.title}”), with your changes:\n\n![Generated](${gen.url})\n\n_Model: ${gen.model}_\n\n_Reference was attached from Display so we know which one you meant._`
-            : `Here's your generated image:\n\n![Generated](${gen.url})\n\n_Model: ${gen.model}_`;
-          appendMessages(userVisible, reply);
-          setData((d) => ({ ...d, chatAttachment: null, draft: '' }));
-          ingestMediaFromReply(reply);
-          setApiOk(true);
-          speakReply(
-            attachment
-              ? 'I remade the image you selected with your changes. It is in chat and Display.'
-              : 'Your image is ready in chat and Display.'
-          );
-        } else {
-          const reply = `I couldn't generate that image: ${gen.error}\n\nCheck that your xAI key has Imagine / image generation access.`;
-          appendMessages(userVisible, reply);
-          setApiOk(false);
-        }
-        setLiveThinking('');
-        setLiveReply('');
-        setChatBusy(false);
-        streamOwnerRef.current = false;
-        publishLive({ busy: false, thinking: '', reply: '' });
-        return;
-      }
-
-      // Normal chat with attachment still in context (not an image-gen request)
-      if (attachment) {
-        // Fall through to chat, but inject attachment into the message so the model sees it
-        // (handled below by rewriting trimmed for API)
-      }
-
-      const action = detectUiAction(trimmed, dataRef.current.projects);
-      let project: Project | null | undefined =
-        dataRef.current.projects.find((p) => p.id === dataRef.current.activeProjectId) || null;
-      let projectId = dataRef.current.activeProjectId;
-
-      if (action.type === 'open-project') {
-        project = dataRef.current.projects.find((p) => p.id === action.projectId) || null;
-        projectId = action.projectId;
-        setData((d) => ({ ...d, activeProjectId: action.projectId }));
-        openPanel('projects');
-      } else if (action.type === 'open-panel') {
-        openPanel(action.panel);
-      }
-
-      const ack = assistantAckForAction(action, project?.resumeNote || undefined);
-      const s = settingsRef.current;
-      const canCloud =
-        !s.demoMode &&
-        (s.connectionMode === 'B' || s.connectionMode === 'C') &&
-        hasApiKeyRef.current;
-
-      let reply: string;
-      let thinking = '';
-      let cloudStreamOk = false;
-
-      if (canCloud) {
-        const folderPaths = dataRef.current.folders
-          .filter(
-            (f) =>
-              dataRef.current.selectedFolderIdsForNewChat.includes(f.id) ||
-              project?.folderIds?.includes(f.id)
-          )
-          .map((f) => f.path);
-
-        const projMedia = (dataRef.current.displayItems || []).filter(
-          (i) => project && i.projectId === project.id
-        );
-        const reviewLines = projMedia.slice(0, 24).map((i) => {
-          const v = i.vote || 'pending';
-          return `- [${v}] ${i.title} (${i.kind})`;
-        });
-        const attNote = dataRef.current.chatAttachment
-          ? `User has attached Display media for this turn: "${dataRef.current.chatAttachment.title}" (${dataRef.current.chatAttachment.kind}). Prefer editing/recreating THAT piece when they give modification instructions.`
-          : null;
-        const system = buildSystemPrompt({
-          projectName: project?.name,
-          projectInstructions: project?.instructions,
-          resumeNote: project?.resumeNote,
-          folders: folderPaths,
-          libraryFolders: (project?.libraryFolders || []).map((f) => f.name),
-          displayReview: [
-            reviewLines.length
-              ? reviewLines.join('\n')
-              : project
-                ? '(no media tagged to this project yet)'
-                : null,
-            attNote,
-          ]
-            .filter(Boolean)
-            .join('\n') || null,
-        });
-
-        const conv = dataRef.current.conversations.find(
-          (c) => c.id === dataRef.current.activeConversationId
-        );
-        const history = (conv?.messages || []).slice(-12).map((m) => ({
-          role: m.role as 'user' | 'assistant' | 'system',
-          content: m.content,
-        }));
-
-        const att = dataRef.current.chatAttachment;
-        let userContent =
-          action.type === 'open-project'
-            ? `${trimmed}\n\n(The app opened the project panel. Continue from the resume note and help with the next section.)`
-            : trimmed;
-        if (att) {
-          userContent += `\n\n[User attached a Display ${att.kind} as the working reference: "${att.title}"]\n![Attached reference](${att.displaySrc || att.src})\nWhen they ask to recreate/modify/change it, treat THIS image as the source — do not invent an unrelated new subject.`;
-        }
-
-        // Add user message early so chat updates while streaming
-        const now = new Date().toISOString();
-        const userMsg: ChatMessage = {
-          id: uid('msg'),
-          role: 'user',
-          content: trimmed,
-          createdAt: now,
-        };
-        setData((prev) => {
-          let convs = [...prev.conversations];
-          let activeId = prev.activeConversationId;
-          let c = convs.find((x) => x.id === activeId);
-          if (!c) {
-            c = {
-              id: uid('conv'),
-              title: trimmed.slice(0, 48) || 'New chat',
-              messages: [],
-              projectId: projectId ?? prev.activeProjectId,
-              folderIds: [...prev.selectedFolderIdsForNewChat],
-              updatedAt: now,
-              saved: false,
-            };
-            convs = [c, ...convs];
-            activeId = c.id;
-          }
-          convs = convs.map((x) =>
-            x.id === activeId
-              ? {
-                  ...x,
-                  messages: [...x.messages, userMsg],
-                  updatedAt: now,
-                  title: x.messages.length ? x.title : trimmed.slice(0, 48) || x.title,
-                }
-              : x
-          );
-          return { ...prev, conversations: convs, activeConversationId: activeId, draft: '' };
-        });
-
-        const streamingSpeech = beginStreamingSpeech();
-        const result = await xaiChatCompletionStream({
-          messages: [
-            { role: 'system', content: system },
-            ...history.filter((m) => m.role !== 'system'),
-            { role: 'user', content: userContent },
-          ],
-          signal: abort.signal,
-          onReasoning: (full) => {
-            setLiveThinking(full);
-            publishLive({ busy: true, thinking: full, reply: undefined });
-          },
-          onContent: (full) => {
-            setLiveReply(full);
-            publishLive({ busy: true, reply: full });
-            if (streamingSpeech) pushStreamingSpeech(full);
-          },
-        });
-
-        if (result.ok) {
-          reply = result.content;
-          thinking = result.thinking;
-          cloudStreamOk = true;
-          setApiOk(true);
-          setLeoReady(true);
-        } else {
-          reply =
-            (ack ? `${ack}\n\n` : '') +
-            `I couldn't reach xAI cloud: ${result.error}. Check your key / network, or turn on Demo mode.`;
-          setApiOk(false);
-          setLeoReady(false);
-        }
-
-        // Append assistant only (user already added)
-        const asstNow = new Date().toISOString();
-        const asstMsg: ChatMessage = {
-          id: uid('msg'),
-          role: 'assistant',
-          content: reply,
-          createdAt: asstNow,
-          thinking: thinking || undefined,
-        };
-        setLastAssistantText(reply);
-        setData((prev) => {
-          const activeId = prev.activeConversationId;
-          return {
-            ...prev,
-            conversations: prev.conversations.map((c) =>
-              c.id === activeId
-                ? { ...c, messages: [...c.messages, asstMsg], updatedAt: asstNow }
-                : c
-            ),
-          };
-        });
-        ingestMediaFromReply(reply);
-      } else {
-        reply = localButlerReply(trimmed, ack, project);
-        appendMessages(trimmed, reply, projectId);
-        ingestMediaFromReply(reply);
-      }
-
-      // Leo sentences start from onContent; only speak the full reply when we did not stream.
-      if (cloudStreamOk && speechActiveRef.current) {
-        finishStreamingSpeech(reply);
-      } else if (!leoQueueRef.current.heardAudio() && !voiceCancelledRef.current) {
-        resetStreamingSpeech();
-        speakReply(reply);
-      }
-      // Clear Display→chat attachment after a normal reply (image-edit path clears itself)
-      setData((d) => (d.chatAttachment ? { ...d, chatAttachment: null } : d));
-
-      // Keep thinking visible after the reply (do not wipe retained notes)
-      if (thinking) setRetainedThinking(thinking);
-      setLiveReply('');
-      setChatBusy(false);
-      streamOwnerRef.current = false;
-      streamAbortRef.current = null;
-      publishLive({
-        busy: false,
-        thinking: thinking || '',
-        reply: '',
-        retainedThinking: thinking || '',
-      });
+      await runSendChat(
+        {
+          dataRef,
+          setData,
+          appendMessages,
+          startNewConversation,
+          setSettingsOpen,
+          openPanel,
+          openGrokTerminal,
+          chatBusy,
+          noteUserActivity,
+          ensureActiveConversation,
+          streamOwnerRef,
+          streamAbortRef,
+          setChatBusy,
+          setLiveThinking,
+          setLiveReply,
+          setRetainedThinking,
+          publishLive,
+          settingsRef,
+          hasApiKeyRef,
+          ingestMediaFromReply,
+          setApiOk,
+          setLeoReady,
+          speakReply,
+          beginStreamingSpeech,
+          pushStreamingSpeech,
+          finishStreamingSpeech,
+          resetStreamingSpeech,
+          setLastAssistantText,
+          localButlerReply,
+          speechActiveRef,
+          voiceCancelledRef,
+          leoQueueRef,
+        },
+        text
+      );
     },
     [
       appendMessages,
@@ -1492,36 +826,8 @@ export function useAppStore() {
 
   const addDisplayFromUrl = useCallback(
     (url: string) => {
-      const extracted = extractMediaFromText(url.includes('://') || url.startsWith('data:') ? url : `https://${url}`);
-      let items = mediaToDisplayItems(extracted);
-      if (!items.length) {
-        // Force as image if user pasted something
-        const now = new Date().toISOString();
-        items = [
-          {
-            id: uid('disp'),
-            kind: /\.(mp4|webm|mov)(\?|$)/i.test(url) ? 'video' : 'image',
-            src: url,
-            title: 'Manual media',
-            createdAt: now,
-            source: 'manual',
-          },
-        ];
-      } else {
-        items = items.map((i) => ({ ...i, source: 'manual' as const }));
-      }
-      setData((d) => ({
-        ...d,
-        displayItems: [
-          ...items.map((i) => ({
-            ...i,
-            projectId: d.activeProjectId,
-            vote: i.vote || ('pending' as const),
-          })),
-          ...(d.displayItems || []),
-        ].slice(0, LIMITS.displayItems),
-        activeDisplayId: items[0].id,
-      }));
+      const items = displayItemsFromManualUrl(url);
+      setData((d) => prependDisplayItems(d, items));
       const pid = dataRef.current.activeProjectId;
       if (pid) openPanel(projectDisplayPanelId(pid));
       else openPanel('display');
@@ -1535,12 +841,7 @@ export function useAppStore() {
   }, []);
 
   const removeDisplayItem = useCallback((id: string) => {
-    setData((d) => {
-      const displayItems = (d.displayItems || []).filter((i) => i.id !== id);
-      const activeDisplayId =
-        d.activeDisplayId === id ? displayItems[0]?.id || null : d.activeDisplayId;
-      return { ...d, displayItems, activeDisplayId };
-    });
+    setData((d) => removeDisplayItemFromData(d, id));
   }, []);
 
   const patchDisplayItem = useCallback(
@@ -1557,47 +858,12 @@ export function useAppStore() {
 
   const addDisplayFromPaths = useCallback(
     (paths: string[]) => {
-      const now = new Date().toISOString();
-      const items: DisplayItem[] = paths
-        .filter(Boolean)
-        .map((p) => {
-          const lower = p.toLowerCase();
-          const kind: DisplayItem['kind'] = /\.(mp4|webm|mov|m4v)(\?|$)/i.test(lower)
-            ? 'video'
-            : /\.(png|jpe?g|gif|webp|bmp|svg)(\?|$)/i.test(lower)
-              ? 'image'
-              : 'image';
-          const name = p.split(/[/\\]/).pop() || 'Dropped file';
-          // Electron File.path is a normal filesystem path
-          const src = p.startsWith('http') || p.startsWith('file:') || p.startsWith('data:')
-            ? p
-            : p;
-          return {
-            id: uid('disp'),
-            kind,
-            src,
-            displaySrc: src.startsWith('data:') ? src : undefined,
-            title: name,
-            createdAt: now,
-            source: 'manual' as const,
-          };
-        });
+      const items = displayItemsFromPaths(paths);
       if (!items.length) {
         showToast('No usable files in that drop.');
         return;
       }
-      setData((d) => ({
-        ...d,
-        displayItems: [
-          ...items.map((i) => ({
-            ...i,
-            projectId: d.activeProjectId,
-            vote: 'pending' as const,
-          })),
-          ...(d.displayItems || []),
-        ].slice(0, LIMITS.displayItems),
-        activeDisplayId: items[0].id,
-      }));
+      setData((d) => prependDisplayItems(d, items));
       const pid = dataRef.current.activeProjectId;
       if (pid) openPanel(projectDisplayPanelId(pid));
       else openPanel('display');
