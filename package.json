@@ -29,18 +29,21 @@
     "start": "electron .",
     "start:prod": "npm run build && set BUTLER_PROD=1&& electron .",
     "pack": "npm run build && set CSC_IDENTITY_AUTO_DISCOVERY=false&& electron-builder --win --config.win.signAndEditExecutable=false",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "build": {
     "appId": "com.butlergrok.app",
     "productName": "Butler Grok",
-    "copyright": "Copyright \u00a9 Butler Grok contributors (third-party, not official xAI)",
+    "copyright": "Copyright © Butler Grok contributors (third-party, not official xAI)",
     "directories": {
       "output": "release"
     },
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "!electron/**/*.{test,spec}.{cjs,js,ts}",
       "package.json"
     ],
     "extraResources": [
@@ -87,7 +90,7 @@
     "react-dom": "^19.0.0",
     "typescript": "^5.7.3",
     "vite": "^6.1.0",
+    "vitest": "^3.2.7",
     "wait-on": "^8.0.2"
   }
 }
-

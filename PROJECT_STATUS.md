@@ -33,7 +33,7 @@ Windows **Electron + React + Vite** app: a butler-themed desk for Grok Build and
 4. Nested library folders  
 5. Better empty states / onboarding  
 6. Optional portable data path only (already partially supported)  
-7. Tests (unit for slash + image detect; smoke e2e)  
+7. More tests (slash + image detect coverage; optional smoke e2e) — Vitest harness is in (`npm test`)  
 8. Linux/mac exploration (not primary yet)  
 
 ## Recent structure (v0.2.x)
