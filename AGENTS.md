@@ -53,7 +53,10 @@ User settings JSON must not include API keys. Keys are stored via Electron `safe
 After code changes:
 
 ```powershell
+npm test
 npm run build
 ```
+
+`npm test` runs Vitest (`vitest run`) — unit tests for speech sentences, Leo stream helpers, store/panel/home helpers. Not Electron E2E.
 
 Optional: `npm run dev` and smoke-test chat + one project Display.

@@ -13,7 +13,9 @@ Thanks for helping make Grok Build more approachable.
 ```powershell
 npm install
 npm run dev          # Electron + Vite HMR
-npm run build        # typecheck + production UI bundle
+npm test             # Vitest unit tests (one shot; CI uses this)
+npm run test:watch   # Vitest in watch mode
+npm run build        # production UI bundle
 npm run start:prod   # run packaged UI path
 ```
 
@@ -44,6 +46,7 @@ Avoid:
 
 ## Pull request checklist
 
+- [ ] `npm test` succeeds  
 - [ ] `npm run build` succeeds  
 - [ ] No secrets in the diff  
 - [ ] UI still makes sense for a non-power user  

@@ -53,6 +53,14 @@ npm run dev
 
 This starts Vite + Electron. The first run opens a short wizard.
 
+Unit tests (no Electron window; safe to run on Linux/mac/Windows):
+
+```powershell
+npm test
+```
+
+Watch mode while editing: `npm run test:watch`.
+
 ### Production-style run (no installer)
 
 ```powershell
