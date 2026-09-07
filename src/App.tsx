@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useAppStore, type AppStore } from './hooks/useAppStore';
-import { HomeTile } from './components/HomeTile';
-import { FloatPanel } from './components/FloatPanel';
-import { ButlerPanel } from './components/ButlerPanel';
+import { useAppStore } from './hooks/useAppStore';
 import { ChatDock } from './components/ChatDock';
 import { SettingsModal } from './components/SettingsModal';
 import { FirstRunWizard } from './components/FirstRunWizard';
 import { CloseConfirm } from './components/CloseConfirm';
-import { renderBody, scopedConversations } from './components/app/renderPanelBody';
+import { ConnectionBanner, TitleBar } from './components/app/TitleBar';
+import { DeskWorkspace } from './components/app/DeskWorkspace';
+import { PanelWindowApp } from './components/app/PanelWindowApp';
+import { scopedConversations } from './components/app/renderPanelBody';
 import { buildTileCounts, buildTileLines, buildTileStatus } from './components/app/homeTiles';
 import {
   DEFAULT_CHAT_HEIGHT,
@@ -15,13 +15,9 @@ import {
   HOME_PANEL_IDS,
   PANEL_META,
   isProjectDisplayPanel,
-  panelTitle,
-  projectIdFromDisplayPanel,
   type PanelId,
   type StaticPanelId,
 } from './lib/types';
-
-const DEFAULT_FLOAT = { x: 40, y: 40, w: 440, h: 360 };
 
 function getPanelIdFromUrl(): PanelId | null {
   try {
@@ -33,55 +29,6 @@ function getPanelIdFromUrl(): PanelId | null {
     /* */
   }
   return null;
-}
-
-/** Standalone OS window for one panel (can leave main app bounds). */
-function PanelWindowApp({ panelId, store }: { panelId: PanelId; store: AppStore }) {
-  const title = useMemo(() => {
-    if (isProjectDisplayPanel(panelId)) {
-      const pid = projectIdFromDisplayPanel(panelId);
-      const name = store.data.projects.find((p) => p.id === pid)?.name;
-      return panelTitle(panelId, name);
-    }
-    return panelTitle(panelId);
-  }, [panelId, store.data.projects]);
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = store.settings.theme;
-    document.title = `Butler Grok — ${title}`;
-  }, [title, store.settings.theme]);
-
-  if (!store.ready) {
-    return (
-      <div className="panel-window-app" style={{ placeItems: 'center', display: 'grid' }}>
-        <div className="muted">Loading…</div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="panel-window-app" data-theme={store.settings.theme}>
-      <div className="panel-window-bar">
-        <h2>{title}</h2>
-        <button
-          type="button"
-          className="icon-btn"
-          title="Close panel"
-          onClick={() => {
-            store.closePanel(panelId);
-            window.close();
-          }}
-        >
-          ✕
-        </button>
-      </div>
-      <div
-        className={`panel-window-body ${panelId === 'chat' ? 'panel-window-body-chat' : ''}`}
-      >
-        {renderBody(panelId, store)}
-      </div>
-    </div>
-  );
 }
 
 export default function App() {
@@ -181,176 +128,15 @@ export default function App() {
           : 'auto 1fr var(--chat-h)',
       }}
     >
-      <header className="titlebar">
-        <div className="brand">
-          <div className="brand-mark" title="Butler Grok" />
-          Butler Grok
-          <span className="sub">unofficial Grok Build Interface · Butler Grok</span>
-        </div>
-        <div className="title-actions">
-          <div className="status-group">
-            <div className="status-pill" title="Grok Build on PATH">
-              <span className={`dot ${store.grokConnected ? 'ok' : ''}`} />
-              Grok Build
-            </div>
-            <button
-              type="button"
-              className="icon-btn primary"
-              title="Open PowerShell and run grok"
-              onClick={() => void window.butler?.grokStart()}
-            >
-              Start Grok
-            </button>
-            <button
-              type="button"
-              className="icon-btn"
-              title={
-                store.settings.grokUpdateAlpha
-                  ? 'Open terminal with: grok update --alpha (press Enter)'
-                  : 'Open terminal with: grok update --stable (press Enter)'
-              }
-              onClick={() =>
-                void store.openGrokTerminal(
-                  store.settings.grokUpdateAlpha ? 'update-alpha' : 'update'
-                )
-              }
-            >
-              Update Grok
-            </button>
-            <div className="status-pill" title="Cloud API / Leo voice ready when key works">
-              <span className={`dot ${store.leoReady || store.apiOk ? 'ok' : ''}`} />
-              Leo / API
-            </div>
-          </div>
-          <button
-            type="button"
-            className="icon-btn"
-            title="Settings"
-            onClick={() => store.setSettingsOpen(true)}
-          >
-            ⚙
-          </button>
-          <div className="win-btns">
-            <button
-              type="button"
-              title="Minimize"
-              onClick={() => void window.butler?.minimize()}
-            >
-              −
-            </button>
-            <button
-              type="button"
-              className="close"
-              title="Close"
-              onClick={() => store.setCloseConfirmOpen(true)}
-            >
-              ✕
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {store.banner ? (
-        <div className="conn-banner">
-          <span>{store.banner}</span>
-          <div className="row-actions">
-            <button type="button" className="btn" onClick={() => void store.refreshGrokStatus()}>
-              Retry
-            </button>
-            <button
-              type="button"
-              className="btn primary"
-              onClick={() => void window.butler?.grokStart()}
-            >
-              Start Grok
-            </button>
-            <button type="button" className="btn" onClick={() => store.setSettingsOpen(true)}>
-              Settings
-            </button>
-            <button type="button" className="btn" onClick={() => store.setBanner(null)}>
-              Dismiss
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      <div className="workspace">
-        <div className="desk">
-          {tiles.map((t) => (
-            <HomeTile
-              key={t.id}
-              id={t.id}
-              x={t.x}
-              y={t.y}
-              lines={tileLines[t.id]}
-              countLabel={tileCounts[t.id]}
-              status={tileStatus[t.id]}
-              onMove={store.moveHomeTile}
-              onOpen={store.openPanel}
-            />
-          ))}
-          {/* Absolute tiles don't expand the desk — spacer creates scroll room below chat */}
-          <div
-            className="desk-scroll-spacer"
-            style={{
-              top: 0,
-              height:
-                Math.max(
-                  400,
-                  ...tiles.map((t) => t.y + 222 + 48),
-                  0
-                ) + 'px',
-            }}
-          />
-
-          {store.openFloats.length ? (
-            <div className="float-layer">
-              {store.openFloats.map((id) => {
-                const layout = store.settings.floatLayouts[id] || DEFAULT_FLOAT;
-                const pname = isProjectDisplayPanel(id)
-                  ? store.data.projects.find((p) => p.id === projectIdFromDisplayPanel(id))
-                      ?.name
-                  : null;
-                return (
-                  <FloatPanel
-                    key={id}
-                    id={id}
-                    title={panelTitle(id, pname)}
-                    x={layout.x}
-                    y={layout.y}
-                    w={layout.w}
-                    h={layout.h}
-                    z={store.floatZ[id] || 10}
-                    onFocus={() => store.focusPanel(id)}
-                    onClose={() => store.closePanel(id)}
-                    onChange={(next) => store.saveFloatLayout(id, next)}
-                  >
-                    {renderBody(id, store)}
-                  </FloatPanel>
-                );
-              })}
-            </div>
-          ) : null}
-        </div>
-
-        <ButlerPanel
-          speaking={store.speaking}
-          thinking={store.chatBusy}
-          chatBusy={store.chatBusy}
-          pointingPanel={store.pointingPanel}
-          lastEngagedAt={store.lastEngagedAt}
-          welcomePulse={store.welcomePulse}
-          userListening={store.userListening}
-          micOn={store.settings.micOn}
-          butlerVoiceOn={store.settings.butlerVoiceOn}
-          onToggleMic={() => store.updateSettings({ micOn: !store.settings.micOn })}
-          onToggleVoice={() =>
-            store.updateSettings({ butlerVoiceOn: !store.settings.butlerVoiceOn })
-          }
-          onReplay={store.replayLast}
-          onStopVoice={store.stopVoice}
-        />
-      </div>
+      <TitleBar store={store} />
+      <ConnectionBanner store={store} />
+      <DeskWorkspace
+        store={store}
+        tiles={tiles}
+        tileLines={tileLines}
+        tileCounts={tileCounts}
+        tileStatus={tileStatus}
+      />
 
       <ChatDock
         variant="dock"

@@ -21,15 +21,8 @@ import {
 } from '../lib/types';
 import { LIMITS } from '../lib/limits';
 import { uid } from '../lib/id';
-import { textForSpeech } from '../lib/xaiChat';
-import { speakText } from '../lib/speech';
-import { speakWithLeo, stopLeoAudio } from '../lib/leoTts';
 import { createLeoSpeakQueue } from '../lib/leoSpeakQueue';
-import {
-  consumeSpeechPieces,
-  flushSpeechRemainder,
-  prepareStreamingSpeech,
-} from '../lib/speechSentences';
+import { stopLeoAudio } from '../lib/leoTts';
 import { ensureSampleData } from '../lib/sampleData';
 import { normalizeAppDataDisplayAndProjects } from '../lib/mediaExtract';
 import { API_KEY_MASK, isApiKeyMask } from '../lib/apiKeyUi';
@@ -52,6 +45,14 @@ import {
   prependDisplayItems,
   removeDisplayItemFromData,
 } from './store/displayActions';
+import {
+  beginStreamingSpeech as beginStreamingSpeechRun,
+  finishStreamingSpeech as finishStreamingSpeechRun,
+  pushStreamingSpeech as pushStreamingSpeechRun,
+  resetStreamingSpeech as resetStreamingSpeechRun,
+  speakReplyText,
+  stopVoicePlayback,
+} from './store/speechRuntime';
 
 export function useAppStore() {
   const [ready, setReady] = useState(false);
@@ -527,171 +528,36 @@ export function useAppStore() {
     []
   );
 
+  const speechRefs = {
+    speechTakenRef,
+    speechSpokenCharsRef,
+    speechActiveRef,
+    voiceCancelledRef,
+    hasApiKeyRef,
+    settingsRef,
+    leoQueueRef,
+  };
+
   const resetStreamingSpeech = useCallback(() => {
-    speechTakenRef.current = 0;
-    speechSpokenCharsRef.current = 0;
-    speechActiveRef.current = false;
-    leoQueueRef.current.reset();
+    resetStreamingSpeechRun(speechRefs);
   }, []);
 
-  const beginStreamingSpeech = useCallback(() => {
-    const s = settingsRef.current;
-    const canLeo =
-      hasApiKeyRef.current &&
-      (s.connectionMode === 'B' || s.connectionMode === 'C') &&
-      s.butlerVoiceOn &&
-      !s.muteSounds;
-    resetStreamingSpeech();
-    voiceCancelledRef.current = false;
-    if (!canLeo) return false;
-    stopLeoAudio();
-    speechActiveRef.current = true;
-    return true;
-  }, [resetStreamingSpeech]);
+  const beginStreamingSpeech = useCallback(() => beginStreamingSpeechRun(speechRefs), []);
 
   const pushStreamingSpeech = useCallback((full: string) => {
-    if (!speechActiveRef.current || voiceCancelledRef.current) return;
-    const prepared = prepareStreamingSpeech(full);
-    const next = consumeSpeechPieces(
-      prepared,
-      speechTakenRef.current,
-      speechSpokenCharsRef.current
-    );
-    speechTakenRef.current = next.nextTaken;
-    speechSpokenCharsRef.current = next.nextSpokenChars;
-    for (const piece of next.pieces) {
-      leoQueueRef.current.enqueue(piece);
-    }
+    pushStreamingSpeechRun(speechRefs, full);
   }, []);
 
   const finishStreamingSpeech = useCallback((full: string) => {
-    if (!speechActiveRef.current) return false;
-    if (voiceCancelledRef.current) {
-      resetStreamingSpeech();
-      return true;
-    }
-    const prepared = prepareStreamingSpeech(full);
-    const tail = flushSpeechRemainder(
-      prepared,
-      speechTakenRef.current,
-      speechSpokenCharsRef.current
-    );
-    if (tail) leoQueueRef.current.enqueue(tail);
-    const used = leoQueueRef.current.wasUsed() || Boolean(tail);
-    leoQueueRef.current.finish();
-    speechActiveRef.current = false;
-    return used;
-  }, [resetStreamingSpeech]);
+    return finishStreamingSpeechRun(speechRefs, full);
+  }, []);
 
   const stopVoice = useCallback(() => {
-    voiceCancelledRef.current = true;
-    speechActiveRef.current = false;
-    leoQueueRef.current.reset();
-    stopLeoAudio();
-    if ('speechSynthesis' in window) {
-      try {
-        window.speechSynthesis.cancel();
-      } catch {
-        /* ignore */
-      }
-    }
-    setSpeaking(false);
-    showToast('Voice stopped.');
+    stopVoicePlayback(speechRefs, setSpeaking, showToast);
   }, [showToast]);
 
   const speakReply = useCallback((reply: string) => {
-    voiceCancelledRef.current = false;
-    // Do NOT set speaking yet — wait until audio actually starts (sync mouth video + VU)
-    setSpeaking(false);
-    const s = settingsRef.current;
-    if (!s.butlerVoiceOn || s.muteSounds) {
-      return;
-    }
-
-    // Don't read huge code dumps aloud — speak a short summary-friendly version
-    const spoken = textForSpeech(reply);
-    if (!spoken) {
-      return;
-    }
-
-    const canLeo =
-      hasApiKeyRef.current && (s.connectionMode === 'B' || s.connectionMode === 'C');
-
-    // Stream TTS in main as bytes arrive; mouth/VU still wait for real LEO_PLAY_START
-
-    const markStart = () => {
-      if (voiceCancelledRef.current) return;
-      setSpeaking(true);
-      setLeoReady(true);
-    };
-    const markEnd = () => setSpeaking(false);
-
-    const fallbackSystem = (why?: string) => {
-      if (voiceCancelledRef.current) {
-        markEnd();
-        return;
-      }
-      if (why) {
-        showToast(`Leo failed — using Windows voice. (${why.slice(0, 90)})`);
-        setLeoReady(false);
-      }
-      const ok = speakText(spoken, {
-        onStart: () => {
-          if (voiceCancelledRef.current) {
-            try {
-              window.speechSynthesis.cancel();
-            } catch {
-              /* ignore */
-            }
-            markEnd();
-            return;
-          }
-          markStart();
-        },
-        onEnd: markEnd,
-      });
-      if (!ok) markEnd();
-    };
-
-    if (canLeo) {
-      if ('speechSynthesis' in window) {
-        try {
-          window.speechSynthesis.cancel();
-        } catch {
-          /* ignore */
-        }
-      }
-      void speakWithLeo(undefined, spoken, {
-        onStart: markStart,
-        onEnd: markEnd,
-        onError: (msg) => {
-          if (msg) setLeoReady(false);
-        },
-      }).then((r) => {
-        if (voiceCancelledRef.current || (r.ok && r.cancelled)) {
-          markEnd();
-          return;
-        }
-        if (!r.ok) {
-          fallbackSystem(r.error);
-        } else {
-          setLeoReady(true);
-          markEnd();
-        }
-      });
-      return;
-    }
-
-    if (voiceCancelledRef.current) {
-      markEnd();
-      return;
-    }
-    showToast('Cloud mode/key needed for Leo — using Windows voice.');
-    const ok = speakText(spoken, {
-      onStart: markStart,
-      onEnd: markEnd,
-    });
-    if (!ok) markEnd();
+    speakReplyText(speechRefs, reply, setSpeaking, setLeoReady, showToast);
   }, [showToast]);
 
   const ingestMediaFromReply = useCallback(

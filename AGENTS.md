@@ -31,7 +31,8 @@ Butler Grok is an **unofficial Electron desktop GUI** around Grok Build / xAI. P
 - `src/hooks/useAppStore.ts` — composing store hook  
 - `src/hooks/store/*` — persist, slash/sendChat, display, conversation helpers  
 - `src/components/panels/*` — Folders / Conversations / Projects / Tasks / Marketplace bodies  
-- `src/components/app/*` — desk tile summaries + panel body router  
+- `src/components/chat/*` — ChatDock toolbar / transcript / compose / Speak STT  
+- `src/components/app/*` — desk, title bar, tile summaries, panel body router  
 - `src/lib/*` — slash commands, xAI chat/image, limits, types  
 - `assets/` — Vite `publicDir` (images + butler video loops)  
 
