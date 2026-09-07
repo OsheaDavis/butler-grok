@@ -1,36 +1,25 @@
 import { useEffect, useMemo, useState } from 'react';
-// useMemo used for panel titles
 import { useAppStore, type AppStore } from './hooks/useAppStore';
-import { HomeTile, type TileLine } from './components/HomeTile';
+import { HomeTile } from './components/HomeTile';
 import { FloatPanel } from './components/FloatPanel';
 import { ButlerPanel } from './components/ButlerPanel';
 import { ChatDock } from './components/ChatDock';
-// AudioLevels is rendered inside ChatDock
 import { SettingsModal } from './components/SettingsModal';
 import { FirstRunWizard } from './components/FirstRunWizard';
 import { CloseConfirm } from './components/CloseConfirm';
-import {
-  ConversationsBody,
-  CurrentlyOpenBody,
-  DisplayBody,
-  FoldersBody,
-  MarketplaceBody,
-  ProjectsBody,
-  TasksBody,
-} from './components/panelBodies';
+import { renderBody, scopedConversations } from './components/app/renderPanelBody';
+import { buildTileCounts, buildTileLines, buildTileStatus } from './components/app/homeTiles';
 import {
   DEFAULT_CHAT_HEIGHT,
   DEFAULT_HOME_TILES,
   HOME_PANEL_IDS,
   PANEL_META,
-  listTasks,
   isProjectDisplayPanel,
   panelTitle,
   projectIdFromDisplayPanel,
   type PanelId,
   type StaticPanelId,
 } from './lib/types';
-import { LIMITS } from './lib/limits';
 
 const DEFAULT_FLOAT = { x: 40, y: 40, w: 440, h: 360 };
 
@@ -44,102 +33,6 @@ function getPanelIdFromUrl(): PanelId | null {
     /* */
   }
   return null;
-}
-
-function scopedConversations(store: AppStore) {
-  const pid = store.data.activeProjectId;
-  const list = store.data.conversations || [];
-  if (pid) {
-    return list
-      .filter((c) => c.projectId === pid)
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  }
-  return list
-    .filter((c) => !c.projectId)
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-}
-
-function ChatPanelBody({ store }: { store: AppStore }) {
-  const scoped = useMemo(() => scopedConversations(store), [store.data]);
-  return (
-    <ChatDock
-      variant="window"
-      conversation={store.activeConversation}
-      draft={store.data.draft}
-      onDraft={(draft) => store.updateData({ draft })}
-      onSend={(t) => void store.sendChat(t)}
-      activeProject={store.activeProject}
-      onClearProject={store.leaveProjectContext}
-      projectConversations={scoped}
-      onSelectConversation={store.selectConversation}
-      onSaveAsProject={() => store.convertChatToProject()}
-      folders={store.data.folders}
-      selectedFolderIds={store.data.selectedFolderIdsForNewChat}
-      onToggleFolder={(id) =>
-        store.updateData((d) => ({
-          ...d,
-          selectedFolderIdsForNewChat: d.selectedFolderIdsForNewChat.includes(id)
-            ? d.selectedFolderIdsForNewChat.filter((x) => x !== id)
-            : [...d.selectedFolderIdsForNewChat, id],
-        }))
-      }
-      onSaveChat={() => {
-        if (store.data.activeConversationId) {
-          store.saveConversation(store.data.activeConversationId);
-        }
-      }}
-      onNewConversation={store.startNewConversation}
-      chatBusy={store.chatBusy}
-      micOn={store.settings.micOn}
-      onToggleMic={() => store.updateSettings({ micOn: !store.settings.micOn })}
-      hasApiKey={store.hasApiKey}
-      useCloudStt={
-        !store.settings.demoMode &&
-        (store.settings.connectionMode === 'B' || store.settings.connectionMode === 'C') &&
-        store.hasApiKey
-      }
-      onToast={store.showToast}
-      liveThinking={store.liveThinking}
-      liveReply={store.liveReply}
-      retainedThinking={store.retainedThinking}
-      speaking={store.speaking}
-      onStopVoice={store.stopVoice}
-      onUserActivity={store.noteUserActivity}
-      onListeningChange={store.setUserListening}
-      onDropFiles={(paths) => store.addDisplayFromPaths(paths)}
-      chatAttachment={store.data.chatAttachment}
-      onClearAttachment={store.clearChatAttachment}
-      onAttachDisplayId={store.bringDisplayToChat}
-    />
-  );
-}
-
-function renderBody(id: PanelId, store: AppStore) {
-  if (isProjectDisplayPanel(id)) {
-    return <DisplayBody store={store} projectId={projectIdFromDisplayPanel(id)} />;
-  }
-  switch (id) {
-    case 'folders':
-      return <FoldersBody store={store} />;
-    case 'conversations':
-      return <ConversationsBody store={store} mode="saved" />;
-    case 'recent':
-      return <ConversationsBody store={store} mode="recent" />;
-    case 'tasks':
-      return <TasksBody store={store} />;
-    case 'projects':
-      return <ProjectsBody store={store} />;
-    case 'currentlyOpen':
-      return <CurrentlyOpenBody store={store} />;
-    case 'marketplace':
-      return <MarketplaceBody store={store} />;
-    case 'display':
-      return <DisplayBody store={store} projectId={null} />;
-    case 'chat':
-      return <ChatPanelBody store={store} />;
-    default:
-      return <div className="empty">Unknown panel</div>;
-  }
 }
 
 /** Standalone OS window for one panel (can leave main app bounds). */
@@ -252,97 +145,20 @@ export default function App() {
     : DEFAULT_HOME_TILES
   ).filter((t) => HOME_PANEL_IDS.includes(t.id));
 
-  const tileLines = useMemo(() => {
-    const folders = store.data.folders.slice(0, 2).map((f) => ({ text: f.label }));
-    const saved = store.savedConversations.slice(0, 2).map((c) => ({
-      text: c.title || 'Saved chat',
-    }));
-    const recent = store.recentConversations.slice(0, 2).map((c) => ({
-      text: c.title || 'Recent chat',
-    }));
-    const allTasks = listTasks(store.data);
-    const tasks = [...allTasks]
-      .filter((t) => t.enabled)
-      .sort((a, b) => a.runAt.localeCompare(b.runAt))
-      .slice(0, 2)
-      .map((t) => ({
-        text: t.title,
-        wave: t.type === 'remind',
-      }));
-    const projects = store.data.projects.slice(0, 2).map((p) => ({
-      text: p.name + (p.resumeNote ? ` · ${p.resumeNote}` : ''),
-    }));
-    const running = store.data.workItems
-      .filter((w) => w.status === 'running' || w.status === 'pending')
-      .slice(0, 2)
-      .map((w) => ({ text: `${w.title} (${w.status})` }));
-    const upcoming = [...allTasks]
-      .filter((t) => t.enabled)
-      .sort((a, b) => a.runAt.localeCompare(b.runAt))
-      .slice(0, 2)
-      .map((t) => ({
-        text: t.title,
-        wave: t.type === 'remind',
-      }));
-
-    const generalCount = (store.data.displayItems || []).filter((i) => !i.projectId).length;
-    return {
-      folders: folders.length ? folders : [{ text: 'No folders yet' }],
-      conversations: saved.length ? saved : [{ text: 'No saved chats yet' }],
-      recent: recent.length ? recent : [{ text: 'No recent chats yet' }],
-      tasks: tasks.length ? tasks : [{ text: 'No tasks yet' }],
-      projects: projects.length ? projects : [{ text: 'No projects yet' }],
-      currentlyOpen:
-        running.length || upcoming.length
-          ? [...running, ...upcoming].slice(0, 2)
-          : [{ text: 'Nothing open yet' }],
-      marketplace: [
-        { text: store.grokConnected ? 'Grok plugins & MCP' : 'Start Grok for marketplace' },
-        { text: 'Install · update · auth' },
-      ],
-      display: generalCount
-        ? [{ text: `${generalCount} general item(s)` }, { text: 'Project media → Projects' }]
-        : [{ text: 'General chat images' }, { text: 'Project Display is separate' }],
-      chat: [{ text: 'Main chat' }],
-    } as Record<StaticPanelId, TileLine[]>;
-  }, [store.data, store.savedConversations, store.recentConversations, store.grokConnected]);
+  const tileLines = useMemo(
+    () => buildTileLines(store),
+    [store.data, store.savedConversations, store.recentConversations, store.grokConnected]
+  );
 
   const tileCounts = useMemo(
-    () =>
-      ({
-        folders: `${store.data.folders.length}/20`,
-        conversations: `${store.savedConversations.length}/20`,
-        recent: `${store.recentConversations.length}/10`,
-        tasks: `${listTasks(store.data).length}/10`,
-        projects: `${store.data.projects.length}/${LIMITS.projects}`,
-        currentlyOpen: `${store.data.workItems.filter((w) => w.status === 'running').length}`,
-        marketplace: '·',
-        display: `${(store.data.displayItems || []).filter((i) => !i.projectId).length}`,
-        chat: '',
-      }) as Record<StaticPanelId, string>,
+    () => buildTileCounts(store),
     [store.data, store.savedConversations, store.recentConversations]
   );
 
-  const tileStatus = useMemo(() => {
-    const allTasks = listTasks(store.data);
-    const dueSoon = allTasks.some(
-      (t) => t.enabled && new Date(t.runAt).getTime() - Date.now() < 15 * 60 * 1000
-    );
-    const running = store.data.workItems.some((w) => w.status === 'running');
-    return {
-      folders: null,
-      conversations: null,
-      recent: null,
-      tasks: dueSoon || allTasks.some((t) => t.type === 'remind' && t.enabled)
-        ? ('warn' as const)
-        : null,
-      projects: store.data.activeProjectId ? ('ok' as const) : null,
-      currentlyOpen: running ? ('ok' as const) : dueSoon ? ('warn' as const) : null,
-      marketplace: store.grokConnected ? ('ok' as const) : null,
-      display: null,
-      chat: null,
-    } as Record<StaticPanelId, 'ok' | 'warn' | null>;
-  }, [store.data, store.grokConnected]);
+  const tileStatus = useMemo(
+    () => buildTileStatus(store),
+    [store.data, store.grokConnected]
+  );
 
   if (panelMode) {
     return <PanelWindowApp panelId={panelMode} store={store} />;

@@ -1,7 +1,7 @@
 # Butler Grok — Project status (public)
 
 **Purpose:** Continuity for humans and coding agents.  
-**Product version:** 0.1.x  
+**Product version:** 0.2.0  
 **License:** MIT (third-party; not official xAI)
 
 ---
@@ -35,6 +35,14 @@ Windows **Electron + React + Vite** app: a butler-themed desk for Grok Build and
 6. Optional portable data path only (already partially supported)  
 7. Tests (unit for slash + image detect; smoke e2e)  
 8. Linux/mac exploration (not primary yet)  
+
+## Recent structure (v0.2.x)
+
+Large core files were split into modules (behavior unchanged):
+
+- Electron: `main.cjs` is the orchestrator; windows / Grok / media / Leo / storage+secrets live in sibling `electron/*.cjs` files  
+- Renderer store: `useAppStore.ts` composes `src/hooks/store/*`  
+- Panel shells: `src/components/panels/*` (re-exported from `panelBodies.tsx`)
 
 ## Architecture reminders
 

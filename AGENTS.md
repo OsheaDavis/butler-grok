@@ -21,10 +21,17 @@ Butler Grok is an **unofficial Electron desktop GUI** around Grok Build / xAI. P
 
 ## Architecture map
 
-- `electron/main.cjs` — windows, IPC, Grok CLI helpers, Leo TTS playback, storage paths  
-- `electron/preload.cjs` — `window.butler` bridge  
-- `src/hooks/useAppStore.ts` — app state, chat, projects, Display  
-- `src/components/*` — UI panels  
+- `electron/main.cjs` — app lifecycle; registers IPC modules  
+- `electron/windows.cjs` — main/panel windows, tray, work-area insets  
+- `electron/coreIpc.cjs` — storage, secrets, xAI stream, dialogs  
+- `electron/grokIpc.cjs` / `grokShell.cjs` — Grok CLI / terminal helpers  
+- `electron/mediaIpc.cjs` — media save/resolve  
+- `electron/leoPlayback.cjs` — Leo TTS stream + MediaPlayer (safeStorage key stays in main)  
+- `electron/preload.cjs` — `window.butler` bridge (unchanged IPC surface)  
+- `src/hooks/useAppStore.ts` — composing store hook  
+- `src/hooks/store/*` — persist, slash/sendChat, display, conversation helpers  
+- `src/components/panels/*` — Folders / Conversations / Projects / Tasks / Marketplace bodies  
+- `src/components/app/*` — desk tile summaries + panel body router  
 - `src/lib/*` — slash commands, xAI chat/image, limits, types  
 - `assets/` — Vite `publicDir` (images + butler video loops)  
 
